@@ -1,0 +1,20 @@
+// 入力元の値を *Slice のフィールドに書き、その *Slice を本体のない関数 fmt_sprintf に渡して、
+// 戻り値を危険な関数に渡す（報告される）。fmt.Sprintf(format, x) の可変長引数を想定した形。
+
+type S = {}
+type Slice = { elem: *S }
+
+declare source() : *S
+declare sink(*S) : void
+declare fmt_sprintf(*S, *Slice) : *S
+
+define f(format: *S) : void {
+  #b0:
+    n0 = source()
+    n1 = __sil_allocate(<Slice>)
+    store n1.Slice.elem <- n0 : *S
+    n2: *S = load &format
+    n3 = fmt_sprintf(n2, n1)
+    n4 = sink(n3)
+    ret null
+}

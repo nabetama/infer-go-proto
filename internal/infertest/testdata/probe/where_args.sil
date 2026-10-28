@@ -1,0 +1,19 @@
+// 入力元の値を、本体のない宣言 Q.Where の args の要素にだけ入れる（プレースホルダの使い方なので報告されない）。
+
+type S = {}
+type Slice = { elem: *S }
+type Q = {}
+
+declare source() : *S
+declare Q.Where(*Q, *S, *Slice) : *Q
+
+define f(q: *Q, safe: *S) : void {
+  #b0:
+    n0 = source()
+    n1: *Q = load &q
+    n2 = __sil_allocate(<Slice>)
+    store n2.Slice.elem <- n0 : *S
+    n3: *S = load &safe
+    n4 = Q.Where(n1, n3, n2)
+    ret null
+}

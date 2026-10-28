@@ -1,0 +1,18 @@
+// 入力元の戻り値を、危険な関数に直接渡す。
+// Infer の infer/tests/codetoanalyze/sil/pulse/basic.sil と同じ形。
+// .source_language はテストが先頭に付け足す。
+
+declare __taint_source() : int
+declare __taint_sink(int) : void
+
+define basic_flow(untainted: int) : void {
+  #node_1:
+    n1 = __taint_source()
+    n2:int = load &untainted
+    jmp node_2
+
+  #node_2:
+    n3 = __taint_sink(n2)
+    n4 = __taint_sink(n1)
+    ret null
+}

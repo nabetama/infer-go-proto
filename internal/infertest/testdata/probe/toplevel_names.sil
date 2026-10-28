@@ -1,0 +1,21 @@
+// メソッドを、クラスつきの名前（Cls.m）ではなく、型とメソッドを $ でつないだトップレベルの名前で書く。
+// パッケージだけが違う同じ名前の型のメソッドを区別できるかを確かめる。
+
+type S = {}
+type Slice = { elem: *S }
+type Req = { Name: *S }
+type Q = {}
+
+declare example_com::orm::Q$Where(*Q, *S, *Slice) : *Q
+declare example_com::other::Q$Where(*Q, *S, *Slice) : *Q
+
+define example_com::app::Svc$Handle(this: *S, req: *Req, q: *Q) : void {
+  #b0:
+    n0: *Req = load &req
+    n1: *S = load n0.Req.Name
+    n2: *Q = load &q
+    n3 = __sil_allocate(<Slice>)
+    n4 = example_com::other::Q$Where(n2, n1, n3)
+    n5 = example_com::orm::Q$Where(n2, n1, n3)
+    ret null
+}

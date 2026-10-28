@@ -74,6 +74,56 @@ Go のソース
 - Textual の `.source_language` に指定できるのは C、Hack、Java、Python、Rust、Swift、ObjectiveC で、Go はない（`infer/src/textual/Textual.ml` の `Lang`）。
 - 上の機能（`ArgumentPositions`、`ArgumentsMatchingTypes`、`taint_initial`、`--capture-textual`）は v1.3.0 タグのソースにもある。ただし、v1.3.0 のバイナリで実際に動かして確かめたわけではない。動かなかった場合は、main の特定のコミットをソースからビルドして使う（設計時の判断）。
 
+#### v1.3.0 のバイナリで確かめたこと（2026-10-28、計画の Task 1）
+
+手書きの `.sil`（`internal/infertest/testdata/probe/`）を Infer v1.3.0 の公式バイナリ（macOS arm64）で `infer capture --capture-textual` と `infer analyze --pulse-only` にかけ、`internal/infertest/probe_test.go` のテストで結果を固定した。上で必要とした機能はすべて v1.3.0 のバイナリで動いたので、main をソースからビルドする必要はない。
+
+**`.source_language` は `c` にする。** `__taint_source()` の戻り値を `__taint_sink` に渡すだけの `.sil`（`direct.sil`）で言語ごとに試した結果は次のとおり。
+
+- `c`、`rust`、`hack`、`swift`: `TAINT_ERROR` が 1 件報告された。
+- `java`: 報告なし。
+- `python`: 取り込みで失敗した（`Python frontend does not allow toplevel definitions`）。
+
+報告された言語のうち、計画で決めた優先順（c → rust → swift）で先頭の `c` を選んだ。C はポインタと構造体を値として扱い、Go の構造体へのポインタとフィールドの読み書きをそのまま書ける。なお `swift` は `direct.sil` では報告されたが、下の他のテストの `.sil` では報告されるべきものも含めて 1 件も報告されなかった。`rust` は下のテストで `c` と同じ結果だった。
+
+**各テストの結果と、後の Task での扱い**（`.source_language = "c"`）
+
+- `TestProbeFormalByType`: 期待どおり。入力元を次のように書くと、`*Req` 型の引数を持つ関数を解析するときにその引数に taint が付き、その値を危険な関数に渡すと報告される。`*Plain` 型の引数は報告されない。
+  ```json
+  { "procedure_regex": ".*", "taint_target": ["ArgumentsMatchingTypes", ["Req"]] }
+  ```
+  `ArgumentsMatchingTypes` は、引数の型が「構造体へのポインタ」で、その構造体の名前（または親の型の名前）が指定した文字列を部分文字列として含むときに一致する（v1.3.0 の `PulseTaintItemMatcher.ml` の `type_matches`。`String.is_substring` で比べる）。`connectrpc_com::connect::Request$example_com::x::pb::GetUserRequest$` のような `::` と `$` を含む型名でも、`"connectrpc_com::connect::Request"` で一致した。部分文字列で比べるので、短い文字列を指定すると関係のない型にも一致する。後の Task では、パッケージを含めた長い名前で指定する。
+- `TestProbeFieldOfTaintedPointer`: 期待どおり。taint の付いた `*Req` から `load n0.Req.Name` で読んだ値を危険な関数に渡すと報告される。`FieldsOfValue` は不要。
+- `TestProbeUnknownCallPropagates`: 期待どおり。本体のない宣言 `declare concat(*S, *S): *S` に taint の付いた値を引数として直接渡すと、戻り値に taint が伝わる。文字列連結（`go::rt` の連結の関数など）は本体のない宣言のままでよい。
+- `TestProbeUnknownCallThroughField`: 期待と異なる。`store n1.Slice.elem <- tainted` した `*Slice` を本体のない宣言 `fmt_sprintf(*S, *Slice): *S` に渡しても、戻り値に taint は伝わらない。後の Task（計画の Task 6）では、`fmt.Sprintf` 用に、`args.elem` を読んで戻り値に流す本体つきのモデルを出力する。動くことを確かめた形は次のもの（`TestProbeSprintfModel`）。本体の中で、本体のない宣言 `concat` を使って `format` と要素をつないでいる。
+  ```
+  define fmt_sprintf(format: *S, args: *Slice) : *S {
+    #b0:
+      n0: *S = load &format
+      n1: *Slice = load &args
+      n2: *S = load n1.Slice.elem
+      n3 = concat(n0, n2)
+      ret n3
+  }
+  ```
+- `TestProbeSprintfModel` で分かった注意点: 同じ本体を `sprintf` という名前で定義すると、taint は伝わらない。`malloc`、`free`、`sprintf` のような C の標準ライブラリと同じ名前の関数は、`.sil` に定義した本体ではなく Pulse が C 用に持つモデルが使われるとみられる。後の Task では、出力する関数名を C の標準ライブラリの関数名と一致させない（パッケージの名前を前に付けた名前にすれば一致しない）。
+- `TestProbeArgPositionWithReceiver`: 期待どおり。`Q.Where(this: *Q, query: *S, args: *Slice)` の `query` は `["ArgumentPositions", [1]]` で指定できる。番号は `.sil` 上の引数の並びのままで、0 番がレシーバ（`this`）になる。`Q.Where` が本体のない宣言でも本体つきの定義でも同じだった。`[0]` を指定すると `query` の taint は報告されない。
+- `TestProbeArgsNotSink`: 期待どおり。taint の付いた値を `args` の要素にだけ入れた場合、`["ArgumentPositions", [1]]` では報告されない。参考として、`["ArgumentPositions", [2]]`（`args` 自身）を指定した場合は、`Q.Where` が本体つきの定義なら要素の taint が報告され、本体のない宣言なら報告されなかった。危険な引数の番号は `query` の番号だけを書く。
+
+**関数名について分かったこと**（`TestProbeProcedureNames`）
+
+- `.source_language = "c"`（`rust` でも同じ）では、`define Cls.m(...)` のクラスの部分が Infer の中の関数名から落ちて、`m` だけになる。
+  - report.json の `procedure` は `"m"` になる（例: `define Svc.Handle(...)` は `"Handle"`）。
+  - 設定の `procedure` / `procedure_regex` が照合する名前も `m` になる。`"procedure_regex": "Q\\.Where"`、`"Q::Where"`、`class_names: ["Q"]` と `method_names: ["Where"]` の組み合わせは一致せず、`"^Where$"` は一致した。
+  - クラスだけが違う同じ名前のメソッド（`define a::A.get` と `define b::B.get`）を 1 回の取り込みに入れると、`infer capture` が `Creating two procdescs for the same procname.` で失敗する。
+- トップレベルの名前に `::` と `$` を使った `define example_com::app::Svc$Handle(...)` は、名前がそのまま使われる。
+  - report.json の `procedure` は `"example_com::app::Svc$Handle"`。トップレベルの `define f(...)` は `"f"`。
+  - qualifier には、呼び出した危険な関数の名前が `` `example_com::orm::Q$Where` `` のように backquote で囲まれて入る。
+  - `"procedure_regex": "^example_com::orm::Q\\$Where$"` は `example_com::orm::Q$Where` にだけ一致し、パッケージだけが違う `example_com::other::Q$Where` には一致しなかった。
+- `procedure` は名前の部分文字列で比べる（`PulseTaintItemMatcher.ml` の `procedure_matches` の `String.is_substring`）。`procedure_regex` は名前の一部に一致すればよいので、名前全体に一致させるときは `^` と `$` を付ける。
+
+このため、計画の `mangle.Func` のように Go のメソッドを `class` と `name` に分けて `define <class>.<name>` と出力すると、パッケージやレシーバの型が名前から落ち、同じ名前のメソッドが 2 つあると取り込みが失敗する。後の Task では、関数もメソッドも、パッケージとレシーバの型を含めた 1 つのトップレベルの名前（例: `example_com::orm::Q$Where`）で出力する。具体的な規則は「関数名の変換規則」に追記する。
+
 ### 関数名の変換規則
 
 Infer の設定は関数名で入力元と危険な関数を指定する。そのため、Go の関数・メソッドを `.sil` 上でどんな名前にするかが設計の中心になる。次の条件を満たす規則にする。
@@ -82,6 +132,8 @@ Infer の設定は関数名で入力元と危険な関数を指定する。そ�
 - `procedure_regex` で「あるパッケージのあるメソッド」を指定できる。
 
 具体的な文字の置き換え方は実装時に決める（作る人に任せる）。決めた規則はこのドキュメントに追記する。
+
+2026-10-28 追記: `.source_language = "c"` では Textual の `Cls.m` という名前のクラスの部分が落ちる（「v1.3.0 のバイナリで確かめたこと」を参照）。そのため、関数もメソッドも、パッケージとレシーバの型を含めた 1 つのトップレベルの名前で出力する。トップレベルの名前に `::` と `$` を使えること、report.json の `procedure` にその名前がそのまま出ることは確かめてある。C の標準ライブラリの関数と同じ名前にならないようにする。
 
 ### 変換する Go の機能の範囲
 
