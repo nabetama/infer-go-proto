@@ -12,6 +12,8 @@
 
 ## Global Constraints
 
+- Task 1 で分かった Infer の挙動と、それに基づく判断は設計ドキュメントの「Infer で確認済みのこと」にある。関数名はすべて 1 つのトップレベル識別子にし、`.inferconfig` では `procedure_regex` を `^...$` で囲んで使う。生成する関数名は `::` を含み、C ライブラリの関数名と一致しないようにする（`__sil_` で始まる Infer の組み込みは除く）。
+
 - リポジトリは公開する。特定の会社・プロダクトのコード、パス、構成、名前をサンプルやドキュメントに持ち込まない。
 - Infer 本体のソースは変更しない。Infer バイナリはリポジトリにコミットしない（`.tools/` に置き、`.gitignore` に入れる）。
 - 報告は、`go2sil` が Go のコードから生成した `.sil` を Infer が解析した結果でなければならない。サンプル用の `.sil` を手で書いて差し替えてはいけない（Task 1 の、Infer の挙動を確かめるための `.sil` は例外）。
@@ -141,8 +143,9 @@ git commit -m "test: Infer v1.3.0 の taint 解析の挙動を確かめるテス
 - Produces:
   - `mangle.Pkg(path string) string`: パッケージパスを Textual の識別子にする。`/` → `::`、`.` と `-` → `_`。
   - `mangle.Type(t types.Type) string`: 名前付きの型を識別子にする。`Pkg(パッケージ) + "::" + 型名`。型引数があれば、`$` で囲んで `,` の代わりに `$` でつなぐ。
-  - `mangle.Func(fn *ssa.Function) (class, name string)`: パッケージの関数は `class = Pkg(パッケージ)`、メソッドは `class = Type(レシーバの名前付きの型)`（ポインタは外す）、`name` は Go の名前。関数リテラルは `name = 親の name + "$" + 番号`（`go/ssa` の `func1` などをそのまま使う）。
-  - `type Table struct{...}`、`(*Table).Add(goName, silName string) error`: 異なる Go 名が同じ Textual 名になったら error を返す。
+  - `mangle.Func(fn *ssa.Function) string`: 1 つのトップレベル識別子を返す（Task 1 で、`.source_language = "c"` では `define Cls.m` の `Cls` が落ちると分かったため）。パッケージの関数は `Pkg(パッケージ) + "::" + 名前`、メソッドは `Type(レシーバの名前付きの型) + "$" + 名前`（ポインタは外す）、関数リテラルは `親の名前 + "$" + ssa の名前（func1 など）`。
+  - `mangle.RT(name string) string`: ランタイム補助の名前 `go::rt::<name>` を返す。
+  - `type Table struct{...}`、`(*Table).Add(goName, silName string) error`: 異なる Go 名が同じ Textual 名になったら error を返す。`::` を含まない Textual 名も error にする（C ライブラリの関数名との衝突を防ぐため）。
 
 - [ ] **Step 1: テストを書く**
 
@@ -160,12 +163,18 @@ func TestTypeGeneric(t *testing.T) {
 	assertNotEqual(t, Type(reqOf("GetUserRequest")), Type(reqOf("ListUsersRequest")))
 }
 func TestFuncMethod(t *testing.T) {
-	// (*bun.SelectQuery).Where → class "github_com::uptrace::bun::SelectQuery", name "Where"
+	// (*bun.SelectQuery).Where → "github_com::uptrace::bun::SelectQuery$Where"
+	// fmt.Sprintf → "fmt::Sprintf"
+	// connect.Request[pb.GetUserRequest] の Any メソッド → "connectrpc_com::connect::Request$example_com::x::pb::GetUserRequest$$Any"
 }
 func TestTableCollision(t *testing.T) {
 	var tb Table
-	if err := tb.Add("example.com/a-b.F", "example_com::a_b.F"); err != nil { t.Fatal(err) }
-	if err := tb.Add("example.com/a_b.F", "example_com::a_b.F"); err == nil { t.Fatal("want collision error") }
+	if err := tb.Add("example.com/a-b.F", "example_com::a_b::F"); err != nil { t.Fatal(err) }
+	if err := tb.Add("example.com/a_b.F", "example_com::a_b::F"); err == nil { t.Fatal("want collision error") }
+}
+func TestTableRejectsUnqualified(t *testing.T) {
+	var tb Table
+	if err := tb.Add("main.sprintf", "sprintf"); err == nil { t.Fatal("want error for name without ::") }
 }
 ```
 
@@ -189,11 +198,11 @@ func TestTableCollision(t *testing.T) {
   - `type Module struct { Types []TypeDecl; Decls []ProcDecl; Procs []Proc }`
   - `type TypeDecl struct { Name string; Fields []Field }`、`type Field struct { Name string; Type Type }`
   - `type Type string`。`"int"`、`"float"`、`"void"`、`"*" + 名前` をそのまま入れる。
-  - `type ProcDecl struct { Class, Name string; Params []Type; Ret Type }`（`declare`）
-  - `type Proc struct { Class, Name string; Params []Param; Ret Type; Blocks []Block }`（`define`）、`type Param struct { Name string; Type Type }`
+  - `type ProcDecl struct { Name string; Params []Type; Ret Type }`（`declare`）
+  - `type Proc struct { Name string; Params []Param; Ret Type; Blocks []Block }`（`define`）、`type Param struct { Name string; Type Type }`
   - `type Block struct { Label string; Instrs []Instr; Term Term }`
   - 命令は `Instr` インタフェースの実装として `Load{Dst Ident; Type Type; Addr Expr}`、`Store{Addr Expr; Val Expr; Type Type}`、`Let{Dst Ident; Val Expr}`（`nX = 式`）、`Prune{Cond Expr; Neg bool}`
-  - 式は `Expr` インタフェースの実装として `Ident`、`Var{Name}`（`&x`）、`FieldOf{Base Expr; Type, Field string}`（`n0.T.f`）、`Call{Class, Name string; Args []Expr}`、`IntConst`、`StrConst`、`Null`、`Alloc{Type string}`（`__sil_allocate(<T>)`）
+  - 式は `Expr` インタフェースの実装として `Ident`、`Var{Name}`（`&x`）、`FieldOf{Base Expr; Type, Field string}`（`n0.T.f`）、`Call{Name string; Args []Expr}`、`IntConst`、`StrConst`、`Null`、`Alloc{Type string}`（`__sil_allocate(<T>)`）
   - 終端は `Term` インタフェースの実装として `Ret{Val Expr}`、`Jmp{Labels []string}`
   - `(*Module).WriteTo(w io.Writer) (int64, error)`: 先頭に `.source_language = "<Lang>"` を出す。型宣言、`declare`、`define` の順に出力する。同じ名前の型宣言と `declare` は 1 つにまとめる。
 
@@ -254,7 +263,7 @@ func TestTableCollision(t *testing.T) {
 
 この Task で変換する SSA 命令: `Alloc`、`Store`、`UnOp`（`*` のみ）、`FieldAddr`、`Field`、`Const`（数値、文字列、nil）、`BinOp`（比較と、数値の算術）、`If`、`Jump`、`Return`、`Call`（静的な呼び出し）、`Extract`。
 - `Alloc` は `__sil_allocate(<T>)`。`NaiveForm` のローカル変数も同じにする。
-- 文字列の定数は、`go::rt.string_const("...")` の呼び出しで `*go::string` を作る。Textual の文字列定数を直接使うかどうかは、Task 1 の結果を見て決める。
+- 文字列の定数は、`go::rt::string_const("...")` の呼び出しで `*go::string` を作る。Textual の文字列定数を直接使うかどうかは、Task 1 の結果を見て決める。
 - 複数の戻り値の `Return` は `go::tuple<N>` を確保してフィールドに入れる。`Extract` はそのフィールドを `load` する。
 - `If` は、Infer の `npe.sil` と同じく `jmp then, else` と、それぞれの先頭の `prune` / `prune !` で表す。
 
@@ -284,13 +293,13 @@ func CallGet(p *V) int { return p.Get() }
 - Create: `internal/translate/models.go`, `internal/translate/models_test.go`
 - Create: `internal/translate/testdata/src/taint/taint.go`
 
-この Task で変換する SSA 命令: `IndexAddr`（slice 用。`go::slice.elem` のアドレスにする）、`Slice`（配列へのポインタから slice を作る。同じポインタをそのまま `*go::slice` として使う）、`MakeInterface`（値を `go::rt.make_iface(x)` に渡す）、`ChangeType` と `Convert`（変換先が名前付きの型なら `go::rt.convert$<mangle.Type(変換先)>(x)`、それ以外なら値をそのまま使う）、`Call` のうちインタフェースのメソッド呼び出し（`ssa.CallCommon.IsInvoke()`）、文字列の `BinOp ADD`（`go::rt.string_concat(a, b)`）。
+この Task で変換する SSA 命令: `IndexAddr`（slice 用。`go::slice.elem` のアドレスにする）、`Slice`（配列へのポインタから slice を作る。同じポインタをそのまま `*go::slice` として使う）、`MakeInterface`（値を `go::rt::make_iface(x)` に渡す）、`ChangeType` と `Convert`（変換先が名前付きの型なら `go::rt::convert$<mangle.Type(変換先)>(x)`、それ以外なら値をそのまま使う）、`Call` のうちインタフェースのメソッド呼び出し（`ssa.CallCommon.IsInvoke()`）、文字列の `BinOp ADD`（`go::rt::string_concat(a, b)`）。
 - インタフェースの呼び出しは、メソッドの名前とインタフェースの型から `declare` を作って呼ぶ。呼び出し先を探すことはしない（設計の「静的に決められるものだけ」の範囲外なので）。
 - 上の `go::rt` の関数は、Task 1 の `TestProbeUnknownCallPropagates` / `TestProbeUnknownCallThroughField` の結果に従って、`declare` だけにするか、本体つきのモデルにするかを決める。
-- `fmt.Sprintf` は、`TestProbeUnknownCallThroughField` が期待どおりでなかった場合に限って、`args.elem` を読んで戻り値に流すモデルを `define` で出力する。
+- `fmt.Sprintf` は、`args.elem` を読んで `go::rt::string_concat` で format とつないで返すモデルを `fmt::Sprintf` として `define` で出力する（Task 1 の `TestProbeSprintfModel` で動作確認済み。名前を C の `sprintf` などと一致させない）。
 
 **Interfaces:**
-- Produces: `.inferconfig` から参照する名前。`bun.Safe(s)` の変換の名前。`bun.Safe` は `schema.Safe` の別名なので、`go::rt.convert$github_com::uptrace::bun::schema::Safe` になる見込み。Task 8 で実際の出力を見て確かめてから使う。
+- Produces: `.inferconfig` から参照する名前。`bun.Safe(s)` の変換の名前。`bun.Safe` は `schema.Safe` の別名なので、`go::rt::convert$github_com::uptrace::bun::schema::Safe` になる見込み。Task 8 で実際の出力を見て確かめてから使う。
 
 - [ ] **Step 1: テストを書く**
 
@@ -309,7 +318,7 @@ type Safe string
 func Conv()             { Sink(string(Safe(Source()))) }                    // Safe への変換を危険な関数にしたとき報告する
 ```
 - `TestTranslateTaintWarnings`: `ViaIface` だけが `TypeAssert` の警告を出し、他の関数は警告なしで `define` されること。
-- `TestTranslateTaintInfer`（Infer がある環境のみ）: `.inferconfig` で `Source` の戻り値を入力元、`Sink` と `Q.Where` の `query`（番号は Task 1 で確かめた値）と `go::rt.convert$...Safe` を危険な関数にする。報告される手続きが `ViaSprintf`、`ViaConcat`、`QueryTainted`、`Conv` のちょうど 4 つで、`ArgsOnly` が含まれないこと。
+- `TestTranslateTaintInfer`（Infer がある環境のみ）: `.inferconfig` で `Source` の戻り値を入力元、`Sink` と `Q.Where` の `query`（番号は Task 1 で確かめた値）と `go::rt::convert$...Safe` を危険な関数にする。報告される手続きが `ViaSprintf`、`ViaConcat`、`QueryTainted`、`Conv` のちょうど 4 つで、`ArgsOnly` が含まれないこと。
 
 - [ ] **Step 2〜4: 失敗 → 実装 → 通過** — Run: `go test ./internal/translate -run TestTranslateTaint -v`
 - [ ] **Step 5: コミットする** — `git commit -m "feat: 可変長引数・インタフェース・型変換を変換する"`
