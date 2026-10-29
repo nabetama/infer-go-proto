@@ -2,7 +2,9 @@
 package infertest
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,8 +50,8 @@ func Run(t testing.TB, silFiles []string, inferconfig string) []Issue {
 	if err := os.WriteFile(filepath.Join(dir, ".inferconfig"), []byte(inferconfig), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := capture(t, bin, dir, silFiles); err != nil {
-		t.Fatalf("infer capture: %v\n%s", err, out)
+	if err := captureErr(capture(t, bin, dir, silFiles)); err != nil {
+		t.Fatal(err)
 	}
 	if out, err := runInfer(bin, dir, "analyze", "--pulse-only", "--no-progress-bar"); err != nil {
 		t.Fatalf("infer analyze: %v\n%s", err, out)
@@ -64,6 +66,25 @@ func Run(t testing.TB, silFiles []string, inferconfig string) []Issue {
 		t.Fatalf("parse report.json: %v", err)
 	}
 	return issues
+}
+
+// Capture は一時ディレクトリで silFiles を Infer に取り込み、失敗したらエラーを返す。
+// infer capture は .sil の構文エラー・型エラー・宣言のない関数の呼び出しがあっても
+// 終了コード 0 を返し、エラーを出力に書くだけなので、出力に "error" か "Error" が
+// 含まれていれば失敗とする。
+func Capture(t testing.TB, silFiles []string) error {
+	t.Helper()
+	return captureErr(capture(t, Bin(t), t.TempDir(), silFiles))
+}
+
+func captureErr(out []byte, err error) error {
+	if err != nil {
+		return fmt.Errorf("infer capture: %v\n%s", err, out)
+	}
+	if bytes.Contains(out, []byte("error")) || bytes.Contains(out, []byte("Error")) {
+		return fmt.Errorf("infer capture reported errors:\n%s", out)
+	}
+	return nil
 }
 
 // capture は dir で `infer capture --capture-textual <silFiles...>` を実行し、出力を返す。

@@ -111,3 +111,42 @@ func TestInferAccepts(t *testing.T) {
 		t.Fatalf("NULLPTR_DEREFERENCE = %d, want 1; issues=%+v", n, issues)
 	}
 }
+
+func TestWriteToRejectsMalformedProcs(t *testing.T) {
+	ret := Ret{Val: Null{}}
+	cases := map[string]*Module{
+		"nil term":  {Procs: []Proc{{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0"}}}}},
+		"empty jmp": {Procs: []Proc{{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: Jmp{}}}}}},
+		"duplicate proc": {Procs: []Proc{
+			{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: ret}}},
+			{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: ret}}},
+		}},
+	}
+	for name, m := range cases {
+		if _, err := m.WriteTo(&bytes.Buffer{}); err == nil {
+			t.Errorf("%s: want error", name)
+		}
+	}
+}
+
+func TestRetNilIsNull(t *testing.T) {
+	m := &Module{Procs: []Proc{{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: Ret{}}}}}}
+	var buf bytes.Buffer
+	if _, err := m.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "    ret null\n") {
+		t.Fatalf("output:\n%s", buf.String())
+	}
+}
+
+func TestFloatConst(t *testing.T) {
+	for _, c := range []struct {
+		v    FloatConst
+		want string
+	}{{1.5, "1.5"}, {2, "2.0"}, {-0.25, "-0.25"}, {1e21, "1000000000000000000000.0"}} {
+		if got := exprString(c.v); got != c.want {
+			t.Errorf("exprString(%v) = %q, want %q", float64(c.v), got, c.want)
+		}
+	}
+}

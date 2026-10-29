@@ -52,7 +52,12 @@ func (m *Module) WriteTo(w io.Writer) (int64, error) {
 	}
 	writeSection(&sb, decls)
 
+	seenProc := map[string]bool{}
 	for _, p := range m.Procs {
+		if seenProc[p.Name] {
+			return 0, fmt.Errorf("sil: define %s appears twice", p.Name)
+		}
+		seenProc[p.Name] = true
 		sb.WriteString("\n")
 		ps := make([]string, len(p.Params))
 		for i, a := range p.Params {
@@ -64,9 +69,11 @@ func (m *Module) WriteTo(w io.Writer) (int64, error) {
 			for _, in := range b.Instrs {
 				fmt.Fprintf(&sb, "    %s\n", instrString(in))
 			}
-			if b.Term != nil {
-				fmt.Fprintf(&sb, "    %s\n", termString(b.Term))
+			term, err := termString(b.Term)
+			if err != nil {
+				return 0, fmt.Errorf("sil: %s, block #%s: %w", p.Name, b.Label, err)
 			}
+			fmt.Fprintf(&sb, "    %s\n", term)
 		}
 		sb.WriteString("}\n")
 	}
@@ -113,12 +120,20 @@ func instrString(in Instr) string {
 	panic(fmt.Sprintf("sil: unknown instruction %T", in))
 }
 
-func termString(t Term) string {
+func termString(t Term) (string, error) {
 	switch v := t.(type) {
+	case nil:
+		return "", fmt.Errorf("block has no terminator")
 	case Ret:
-		return "ret " + exprString(v.Val)
+		if v.Val == nil {
+			return "ret null", nil
+		}
+		return "ret " + exprString(v.Val), nil
 	case Jmp:
-		return "jmp " + strings.Join(v.Labels, ", ")
+		if len(v.Labels) == 0 {
+			return "", fmt.Errorf("jmp has no labels")
+		}
+		return "jmp " + strings.Join(v.Labels, ", "), nil
 	}
 	panic(fmt.Sprintf("sil: unknown terminator %T", t))
 }
@@ -141,6 +156,12 @@ func exprString(e Expr) string {
 		return strconv.FormatInt(int64(v), 10)
 	case StrConst:
 		return strconv.Quote(string(v))
+	case FloatConst:
+		f := strconv.FormatFloat(float64(v), 'f', -1, 64)
+		if !strings.Contains(f, ".") {
+			f += ".0"
+		}
+		return f
 	case Null:
 		return "null"
 	case Alloc:

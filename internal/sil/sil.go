@@ -44,7 +44,7 @@ type Param struct {
 	Type Type
 }
 
-// Block の Label は "#" と ":" を含まない名前。
+// Block の Label は "#" と ":" を含まない名前。Term が nil なら WriteTo はエラーを返す。
 type Block struct {
 	Label  string
 	Instrs []Instr
@@ -106,6 +106,9 @@ type Call struct {
 
 type IntConst int64
 
+// FloatConst は浮動小数点数の定数。出力時は必ず小数点を含める。
+type FloatConst float64
+
 // StrConst は文字列リテラル。出力時に引用符で囲み、エスケープする。
 type StrConst string
 
@@ -114,19 +117,20 @@ type Null struct{}
 // Alloc は `__sil_allocate(<Type>)`。
 type Alloc struct{ Type string }
 
-func (Ident) expr()    {}
-func (Var) expr()      {}
-func (FieldOf) expr()  {}
-func (Call) expr()     {}
-func (IntConst) expr() {}
-func (StrConst) expr() {}
-func (Null) expr()     {}
-func (Alloc) expr()    {}
+func (Ident) expr()      {}
+func (Var) expr()        {}
+func (FieldOf) expr()    {}
+func (Call) expr()       {}
+func (IntConst) expr()   {}
+func (FloatConst) expr() {}
+func (StrConst) expr()   {}
+func (Null) expr()       {}
+func (Alloc) expr()      {}
 
-// Ret は `ret Val`。
+// Ret は `ret Val`。Val が nil なら `ret null` と出力する。
 type Ret struct{ Val Expr }
 
-// Jmp は `jmp L1, L2`。
+// Jmp は `jmp L1, L2`。Labels が空なら WriteTo はエラーを返す。
 type Jmp struct{ Labels []string }
 
 func (Ret) term() {}
