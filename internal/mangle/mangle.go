@@ -99,37 +99,50 @@ func Func(fn *ssa.Function) string {
 		return Func(fn.Parent()) + strings.TrimPrefix(fn.Name(), fn.Parent().Name())
 	}
 	base := funcBase(fn)
+	suffix := ""
 	switch {
 	case strings.HasPrefix(fn.Synthetic, "wrapper for"):
-		return base + "$wrapper"
+		suffix = "$wrapper"
 	case strings.HasPrefix(fn.Synthetic, "bound method wrapper"):
-		return base + "$bound"
+		suffix = "$bound"
 	case strings.HasPrefix(fn.Synthetic, "thunk for"):
-		return base + "$thunk"
+		suffix = "$thunk"
 	}
-	return base
+	// go/ssa already names bound methods and thunks "M$bound" / "M$thunk".
+	if strings.HasSuffix(base, suffix) {
+		return base
+	}
+	return base + suffix
 }
 
 func funcBase(fn *ssa.Function) string {
-	if recv := fn.Signature.Recv(); recv != nil {
-		return Type(recv.Type()) + "$" + fn.Name()
-	}
 	name := fn.Name()
-	if strings.HasPrefix(fn.Synthetic, "instance of") {
+	if strings.HasPrefix(fn.Synthetic, "instance of") && fn.Signature.Recv() == nil {
 		// go/ssa names an instance "Id[int]"; use the origin's name and the
 		// type arguments instead.
 		if o := fn.Origin(); o != nil {
 			name = o.Name() + typeArgList(fn.TypeArgs())
 		}
 	}
-	pkg := fn.Pkg
-	if pkg == nil && fn.Object() != nil && fn.Object().Pkg() != nil {
-		return Pkg(fn.Object().Pkg().Path()) + "::" + name
+	// Bound methods and thunks have no receiver in their own signature; take
+	// it from the method they wrap.
+	recv := fn.Signature.Recv()
+	if obj, ok := fn.Object().(*types.Func); ok && recv == nil {
+		recv = obj.Signature().Recv()
+	}
+	if recv != nil {
+		return Type(recv.Type()) + "$" + name
+	}
+	var pkg *types.Package
+	if fn.Pkg != nil {
+		pkg = fn.Pkg.Pkg
+	} else if fn.Object() != nil {
+		pkg = fn.Object().Pkg()
 	}
 	if pkg == nil {
 		panic(fmt.Sprintf("mangle.Func: %s has no package", fn))
 	}
-	return Pkg(pkg.Pkg.Path()) + "::" + name
+	return Pkg(pkg.Path()) + "::" + name
 }
 
 // Table remembers which Go name produced each Textual name.

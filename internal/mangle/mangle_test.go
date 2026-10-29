@@ -81,6 +81,29 @@ type S struct{}
 func (s S) Val() {}
 func (s *S) Ptr() {}
 
+type A struct{}
+type B struct{}
+
+func (A) M()  {}
+func (*B) M() {}
+
+func UseBoundThunk() {
+	var a A
+	var b B
+	_ = a.M
+	_ = b.M
+	_ = A.M
+	_ = (*B).M
+	_ = C.M
+	sinkI = I.M
+}
+
+var sinkI func(I)
+
+type C struct{ A }
+
+type I interface{ M() }
+
 func Top() {
 	f := func() {}
 	f()
@@ -171,5 +194,34 @@ func TestTableRejectsUnqualified(t *testing.T) {
 	}
 	if err := tb.Add("builtin", "__sil_allocate"); err != nil {
 		t.Fatalf("__sil_ names are allowed: %v", err)
+	}
+}
+
+func TestFuncBoundAndThunk(t *testing.T) {
+	pkg, _ := buildPkg(t)
+	got := map[string]bool{}
+	for fn := range ssautil.AllFunctions(pkg.Prog) {
+		if fn.Pkg == pkg || fn.Synthetic != "" {
+			got[Func(fn)] = true
+		}
+	}
+	// Thunks are only reachable as operands.
+	for _, b := range pkg.Func("UseBoundThunk").Blocks {
+		for _, in := range b.Instrs {
+			for _, o := range in.Operands(nil) {
+				if f, ok := (*o).(*ssa.Function); ok {
+					got[Func(f)] = true
+				}
+			}
+		}
+	}
+	for _, want := range []string{
+		"example_com::p::A$M$bound",
+		"example_com::p::B$M$bound", "example_com::p::C$M$wrapper",
+		"example_com::p::I$M$thunk",
+	} {
+		if !got[want] {
+			t.Errorf("missing %q in %v", want, got)
+		}
 	}
 }
