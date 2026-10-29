@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/token"
@@ -15,8 +16,10 @@ import (
 )
 
 // unsupportedError makes the whole function a declare. what is the Go type
-// of the instruction or operand, e.g. "*ssa.TypeAssert".
-type unsupportedError struct{ what string }
+// of the unsupported instruction or operand, e.g. "*ssa.TypeAssert" or
+// "*ssa.Global". build sets instr to the Go type of the instruction being
+// translated, so that the warning always names the instruction.
+type unsupportedError struct{ what, instr string }
 
 func (e *unsupportedError) Error() string { return "unsupported " + e.what }
 
@@ -87,6 +90,10 @@ func (fb *funcBuilder) build() (sil.Proc, error) {
 		fb.cur = &fb.blocks[len(fb.blocks)-1]
 		for _, instr := range b.Instrs {
 			if err := fb.instr(instr); err != nil {
+				var unsup *unsupportedError
+				if errors.As(err, &unsup) {
+					unsup.instr = fmt.Sprintf("%T", instr)
+				}
 				return sil.Proc{}, err
 			}
 		}

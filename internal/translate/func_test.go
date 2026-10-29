@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -182,9 +184,18 @@ func TestTranslateCalls(t *testing.T) {
 
 func TestTranslateUnsupported(t *testing.T) {
 	m, warn := translatePkgs(t, "./testdata/src/unsupported")
-	want := "go2sil: warning: github.com/nabetama/infer-go-proto/internal/translate/testdata/src/unsupported.Assert: unsupported *ssa.TypeAssert\n"
-	if warn != want {
-		t.Errorf("warnings = %q, want %q", warn, want)
+	// The line names the Go type of the instruction; the operand's type,
+	// when that is what is unsupported, follows in parentheses.
+	const prefix = "go2sil: warning: github.com/nabetama/infer-go-proto/internal/translate/testdata/src/unsupported."
+	want := []string{
+		prefix + "Assert: unsupported *ssa.TypeAssert",
+		prefix + "CallFunc: unsupported *ssa.Call",
+		prefix + "ReadGlobal: unsupported *ssa.UnOp (operand *ssa.Global)",
+	}
+	got := strings.Split(strings.TrimSuffix(warn, "\n"), "\n")
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("warnings =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 	pkg := "github_com::nabetama::infer_go_proto::internal::translate::testdata::src::unsupported"
 	if _, ok := procByName(m, pkg+"::Assert"); ok {

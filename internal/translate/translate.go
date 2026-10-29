@@ -18,11 +18,20 @@ import (
 // declare instead.
 type Warning struct {
 	Func  string // fn.String()
-	Instr string // Go type of the instruction, e.g. "*ssa.TypeAssert"
+	Instr string // Go type of the instruction, e.g. "*ssa.UnOp"
+	// Operand is the Go type of the unsupported operand of Instr (e.g.
+	// "*ssa.Global"), or "" when the instruction itself is unsupported.
+	Operand string
 }
 
+// String returns `go2sil: warning: <Func>: unsupported <Instr>`, followed by
+// ` (operand <Operand>)` when Operand is set.
 func (w Warning) String() string {
-	return fmt.Sprintf("go2sil: warning: %s: unsupported %s", w.Func, w.Instr)
+	s := fmt.Sprintf("go2sil: warning: %s: unsupported %s", w.Func, w.Instr)
+	if w.Operand != "" {
+		s += " (operand " + w.Operand + ")"
+	}
+	return s
 }
 
 // Translate converts the functions of pkgs into a Textual module.
@@ -176,7 +185,11 @@ func (tr *translator) function(fn *ssa.Function) error {
 	proc, err := fb.build()
 	var unsup *unsupportedError
 	if errors.As(err, &unsup) {
-		fmt.Fprintln(tr.warn, Warning{Func: fn.String(), Instr: unsup.what}.String())
+		w := Warning{Func: fn.String(), Instr: unsup.instr}
+		if unsup.what != unsup.instr {
+			w.Operand = unsup.what
+		}
+		fmt.Fprintln(tr.warn, w.String())
 		return tr.declare(fn)
 	}
 	if err != nil {
