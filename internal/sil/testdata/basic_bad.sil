@@ -1,0 +1,22 @@
+.source_language = "c"
+
+type cell = { value: int; next: *cell }
+type list = { header: *cell }
+
+declare check(*list) : void
+
+define basic_bad(l: *list) : void {
+  #entry:
+    store &l <- null: *list
+    n0: *list = load &l
+    n1: *cell = load n0.list.header
+    n2 = check(n0)
+    jmp ok, done
+  #ok:
+    prune ! n2
+    n3 = __sil_allocate(<cell>)
+    n4 = "s\"x"
+    ret null
+  #done:
+    ret null
+}
