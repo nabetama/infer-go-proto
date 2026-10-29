@@ -41,7 +41,12 @@ func newTypeConv() *typeConv {
 //	interface              *go::iface
 //	slice, array           *go::slice
 //	map, chan, func        *go::opaque
-//	tuple of N >= 2        *go::tuple<N>   (a 1-tuple is its element, a 0-tuple is void)
+//	tuple of N >= 2        *go::tuple<N>$<field types>$   (a 1-tuple is its element, a 0-tuple is void)
+//
+// The tuple name includes the field types ('*' spelled "ptr_", each followed
+// by '$'), e.g. go::tuple2$int$ptr_go::string$, because Infer type-checks
+// field stores and tuples of different element types need different
+// declarations.
 //
 // Named types that are not structs are converted from their underlying type.
 func (c *typeConv) Type(t types.Type) sil.Type {
@@ -81,16 +86,24 @@ func (c *typeConv) Type(t types.Type) sil.Type {
 		case 1:
 			return c.Type(t.At(0).Type())
 		}
-		name := fmt.Sprintf("go::tuple%d", t.Len())
-		if !c.seen[name] {
-			c.seen[name] = true
-			fields := make([]sil.Field, t.Len())
-			for i := range fields {
-				fields[i] = sil.Field{Name: fmt.Sprintf("r%d", i), Type: c.Type(t.At(i).Type())}
+		fields := make([]sil.Field, t.Len())
+		var name strings.Builder
+		fmt.Fprintf(&name, "go::tuple%d$", t.Len())
+		for i := range fields {
+			ft := c.Type(t.At(i).Type())
+			fields[i] = sil.Field{Name: fmt.Sprintf("r%d", i), Type: ft}
+			s := string(ft)
+			for strings.HasPrefix(s, "*") {
+				name.WriteString("ptr_")
+				s = s[1:]
 			}
-			c.decls[name] = sil.TypeDecl{Name: name, Fields: fields}
+			name.WriteString(s + "$")
 		}
-		return sil.Type("*" + name)
+		if !c.seen[name.String()] {
+			c.seen[name.String()] = true
+			c.decls[name.String()] = sil.TypeDecl{Name: name.String(), Fields: fields}
+		}
+		return sil.Type("*" + name.String())
 	}
 	// map, chan, func, type parameters and anything else
 	return c.runtime(tyOpaque)

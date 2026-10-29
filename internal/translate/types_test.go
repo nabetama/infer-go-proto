@@ -91,16 +91,16 @@ func TestTypeBasics(t *testing.T) {
 		{types.NewChan(types.SendRecv, types.Typ[types.Int]), "*go::opaque"},
 		{types.NewSignatureType(nil, nil, nil, nil, nil, false), "*go::opaque"},
 		{types.NewInterfaceType(nil, nil), "*go::iface"},
-		{types.NewTuple(types.NewVar(0, nil, "a", types.Typ[types.Int]), types.NewVar(0, nil, "b", types.Typ[types.String])), "*go::tuple2"},
+		{types.NewTuple(types.NewVar(0, nil, "a", types.Typ[types.Int]), types.NewVar(0, nil, "b", types.Typ[types.String])), "*go::tuple2$int$ptr_go::string$"},
 	}
 	for _, c := range cases {
 		if got := tc.Type(c.t); got != c.want {
 			t.Errorf("Type(%s) = %q, want %q", c.t, got, c.want)
 		}
 	}
-	d, ok := declByName(tc.Decls(), "go::tuple2")
+	d, ok := declByName(tc.Decls(), "go::tuple2$int$ptr_go::string$")
 	if !ok || !reflect.DeepEqual(d.Fields, []sil.Field{{Name: "r0", Type: "int"}, {Name: "r1", Type: "*go::string"}}) {
-		t.Errorf("go::tuple2 decl = %v, %v", d, ok)
+		t.Errorf("tuple decl = %v, %v", d, ok)
 	}
 }
 
