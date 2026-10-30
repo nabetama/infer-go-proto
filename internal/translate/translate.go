@@ -55,6 +55,7 @@ func Translate(pkgs []*ssa.Package, warn io.Writer) (*sil.Module, error) {
 		tc:      newTypeConv(),
 		queued:  map[*ssa.Function]bool{},
 		decls:   map[string]sil.ProcDecl{},
+		modeled: map[string]bool{},
 		warn:    warn,
 	}
 	var prog *ssa.Program
@@ -118,6 +119,7 @@ type translator struct {
 	queued  map[*ssa.Function]bool
 	decls   map[string]sil.ProcDecl
 	procs   []sil.Proc
+	modeled map[string]bool // names of the models already defined
 	warn    io.Writer
 }
 
@@ -208,17 +210,37 @@ func (tr *translator) function(fn *ssa.Function) error {
 			return err
 		}
 	}
+	for _, d := range fb.ifaceDecls {
+		if err := tr.names.Add(d.goName, d.decl.Name); err != nil {
+			return err
+		}
+		tr.decls[d.decl.Name] = d.decl
+	}
 	tr.procs = append(tr.procs, proc)
 	return nil
 }
 
 // declare adds a declare for fn with the parameter types of its signature
 // (free variables first for closures, then the receiver, then the
-// parameters).
+// parameters). If fn has a model (models.go), the model is defined instead.
 func (tr *translator) declare(fn *ssa.Function) error {
 	name := mangle.Func(fn)
 	if err := tr.names.Add(fn.String(), name); err != nil {
 		return err
+	}
+	if m, ok := models[name]; ok {
+		if tr.modeled[name] {
+			return nil
+		}
+		tr.modeled[name] = true
+		proc, rt := m(tr.tc)
+		for _, d := range rt {
+			if err := tr.declareRT(d); err != nil {
+				return err
+			}
+		}
+		tr.procs = append(tr.procs, proc)
+		return nil
 	}
 	var params []sil.Type
 	for _, fv := range fn.FreeVars {

@@ -133,6 +133,15 @@ Go のソース
 - 文字列の定数は `go::rt::string_const("...")` の呼び出しにする。引数は Textual の文字列リテラル、戻り値は `*go::string`、本体のない宣言のまま（Task 1 で、本体のない宣言は引数の taint を戻り値に伝えることを確かめた。定数には taint はない）。
 - struct の値は、確保した領域へのポインタで表す。値のコピー（`Store`、`*p`）ではフィールドを 1 つずつコピーし、struct 型のフィールドは確保した領域へのポインタを持たせて中身をコピーする。変換したコードを Pulse にかけ、コピーした後に元の値へ入れた taint がコピー先から報告されないことを確かめた。
 
+#### 可変長引数・インタフェース・型の変換で確かめたこと（2026-10-30、計画の Task 6）
+
+- slice と配列の要素は、添字を区別せず `go::slice` の 1 つのフィールド `elem` で表す。`IndexAddr` は `nK = s.go::slice.elem`。配列は `*go::slice` なので、配列の `Alloc` は `**go::slice` になる。`Alloc` は `__sil_allocate(<go::slice>)` で領域を確保し、それを `*go::slice` の領域に入れる。配列へのポインタからの `IndexAddr` と `Slice` は、一度 `load` して `*go::slice` を取り出す。これで `a[:]` は配列と同じ `go::slice` を指す。配列から作った slice の要素に入れた taint が報告されることを Pulse で確かめた（`testdata/src/elems` の `ArrayToSlice`）。
+- `MakeInterface` は `go::rt::make_iface(x)`、文字列の `+` は `go::rt::string_concat(a, b)`。どちらも本体のない宣言で、引数の taint が戻り値に伝わる。
+- 名前付きの型 T への `ChangeType` / `Convert` は `go::rt::convert$<mangle.Type(T)>(x)` の呼び出しにする。宣言の引数と戻り値の型は、どちらも T の Textual の型。名前のない型への変換は値をそのまま使う。ただし int と float の間の変換は `__sil_cast(<float>, n0)` にする（そのまま使うと取り込みが `expression n4 has type int, while a subtype of float was expected` で失敗し、ファイル全体が取り込まれない）。数値と文字列の間の変換（`string(r)`）は変換しない（警告）。`type Safe string` への変換は `go::rt::convert$<パッケージ>::Safe(*go::string) : *go::string` になり、`"procedure_regex": "^go::rt::convert\\$<パッケージ>::Safe$"` を危険な関数にすると報告された。
+- インタフェースのメソッド呼び出し（`IsInvoke`）は、呼び出し先を探さず、`<mangle.Type(インタフェース)>$<メソッド名>` という本体のない宣言を呼ぶ。最初の引数はインタフェースの値（`*go::iface`）。名前のないインタフェース型のメソッド呼び出しは変換しない（警告）。
+- `fmt.Sprintf` は `fmt::Sprintf` という本体つきのモデルにする（`internal/translate/models.go`）。format と `args.go::slice.elem` を `go::rt::string_concat` でつないで返す。args が nil（可変長引数がない呼び出し）のときは format を返す。モデルのある関数は `declare` を出さない。`sil.WriteTo` は、同じ名前を `declare` と `define` の両方で出すとエラーを返す。
+- 取り込みは、呼び出しの引数の型が宣言の引数の型と違っても（`int` を `*go::string` の引数に渡す）、`*go::iface` の値を `*go::opaque` のフィールドに `store` しても、エラーを出さなかった。（Task 5 で見た `*int` と `*float` の `store` の不一致はエラーになる。）引数の型が呼び出しごとに違っても宣言が 1 つで済むよう、 `go::rt::make_iface` の宣言は引数の型を `*go::opaque` に固定している。
+
 ### 関数名の変換規則
 
 Infer の設定は関数名で入力元と危険な関数を指定する。そのため、Go の関数・メソッドを `.sil` 上でどんな名前にするかが設計の中心になる。次の条件を満たす規則にする。

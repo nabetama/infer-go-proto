@@ -48,6 +48,14 @@ type funcBuilder struct {
 
 	callees []*ssa.Function         // statically called functions
 	rtDecls map[string]sil.ProcDecl // runtime helpers used by the body
+	// ifaceDecls are the declares of the interface methods the body calls,
+	// by Textual name.
+	ifaceDecls map[string]ifaceDecl
+}
+
+type ifaceDecl struct {
+	goName string // e.g. "(pkg.Getter).Get"
+	decl   sil.ProcDecl
 }
 
 func newFuncBuilder(tr *translator, fn *ssa.Function, name string) *funcBuilder {
@@ -60,6 +68,8 @@ func newFuncBuilder(tr *translator, fn *ssa.Function, name string) *funcBuilder 
 		skipped: map[ssa.Value]bool{},
 		ifConds: map[*ssa.If]sil.Expr{},
 		rtDecls: map[string]sil.ProcDecl{},
+
+		ifaceDecls: map[string]ifaceDecl{},
 	}
 }
 
@@ -223,6 +233,9 @@ func (fb *funcBuilder) constant(c *ssa.Const) (sil.Expr, error) {
 	if st, ok := t.Underlying().(*types.Struct); ok {
 		return fb.allocStruct(t, st), nil // zero value of a struct
 	}
+	if _, ok := t.Underlying().(*types.Array); ok {
+		return fb.let(sil.Alloc{Type: tySlice}), nil // zero value of an array
+	}
 	b, ok := t.Underlying().(*types.Basic)
 	if !ok {
 		if c.Value != nil {
@@ -350,6 +363,16 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 			fb.vals[in] = fb.allocStruct(elem, st)
 			return nil
 		}
+		if _, ok := elem.Underlying().(*types.Array); ok {
+			// An array is a *go::slice, so the Alloc is a **go::slice
+			// pointing to new storage.
+			et := fb.tr.tc.Type(elem)
+			storage := fb.let(sil.Alloc{Type: tySlice})
+			id := fb.let(sil.Alloc{Type: string(et)})
+			fb.emit(sil.Store{Addr: id, Val: storage, Type: et})
+			fb.vals[in] = id
+			return nil
+		}
 		et := fb.tr.tc.Type(elem)
 		id := fb.let(sil.Alloc{Type: string(et)})
 		fb.emit(sil.Store{Addr: id, Val: zero(et), Type: et})
@@ -428,6 +451,56 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 		fb.vals[in] = fb.load(fb.tr.tc.Type(f.Type()), addr)
 		return nil
 
+	case *ssa.IndexAddr:
+		// All elements of a slice or array share the field go::slice.elem.
+		// The index is not used.
+		s, err := fb.sliceOf(in.X)
+		if err != nil {
+			return err
+		}
+		addr := sil.FieldOf{Base: s, Type: tySlice, Field: "elem"}
+		elem := deref(in.Type())
+		if _, ok := structOf(elem); ok {
+			// Like a struct field, the element holds a pointer to the
+			// struct's storage.
+			fb.vals[in] = fb.load(fb.tr.tc.Type(elem), addr)
+			return nil
+		}
+		fb.vals[in] = fb.let(addr)
+		return nil
+
+	case *ssa.Slice:
+		if b, ok := in.X.Type().Underlying().(*types.Basic); ok && b.Info()&types.IsString != 0 {
+			// A substring keeps the string as it is.
+			x, err := fb.value(in.X)
+			if err != nil {
+				return err
+			}
+			fb.vals[in] = x
+			return nil
+		}
+		// The slice shares the storage of the slice or array it is made from.
+		s, err := fb.sliceOf(in.X)
+		if err != nil {
+			return err
+		}
+		fb.vals[in] = s
+		return nil
+
+	case *ssa.MakeInterface:
+		x, err := fb.value(in.X)
+		if err != nil {
+			return err
+		}
+		fb.vals[in] = fb.callRT("make_iface", []sil.Type{fb.tr.tc.runtime(tyOpaque)}, fb.tr.tc.runtime(tyIface), x)
+		return nil
+
+	case *ssa.ChangeType:
+		return fb.convert(in, in.X)
+
+	case *ssa.Convert:
+		return fb.convert(in, in.X)
+
 	case *ssa.BinOp:
 		return fb.binOp(in)
 
@@ -463,6 +536,58 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 	}
 	return unsupported(instr)
 }
+
+// sliceOf returns the *go::slice of x, which is a slice or a pointer to an
+// array. A pointer to an array is a **go::slice and is loaded once.
+func (fb *funcBuilder) sliceOf(x ssa.Value) (sil.Expr, error) {
+	v, err := fb.value(x)
+	if err != nil {
+		return nil, err
+	}
+	switch t := x.Type().Underlying().(type) {
+	case *types.Slice:
+		return v, nil
+	case *types.Pointer:
+		if _, ok := t.Elem().Underlying().(*types.Array); ok {
+			return fb.load(fb.tr.tc.Type(t.Elem()), v), nil
+		}
+	}
+	return nil, unsupported(x)
+}
+
+// convert translates ChangeType and Convert. A conversion to a named type T
+// calls go::rt::convert$<mangle.Type(T)>, declared with T's Textual type as
+// both parameter and result type, so that .inferconfig can name the
+// conversion. A conversion to an unnamed type uses the value as it is,
+// except between int and float, which is a __sil_cast.
+func (fb *funcBuilder) convert(in ssa.Value, x ssa.Value) error {
+	v, err := fb.value(x)
+	if err != nil {
+		return err
+	}
+	t := fb.tr.tc.Type(in.Type())
+	target, ok := types.Unalias(in.Type()).(*types.Named)
+	if !ok {
+		// Infer rejects an int where a float is expected (and the other way
+		// round), so numbers are cast. Other conversions between a number
+		// and a pointer type (string(r)) are not translated.
+		switch xt := fb.tr.tc.Type(x.Type()); {
+		case xt == t:
+			fb.vals[in] = v
+		case isNumber(xt) && isNumber(t):
+			fb.vals[in] = fb.let(sil.Cast{Type: t, Val: v})
+		case isNumber(xt) || isNumber(t):
+			return unsupported(in)
+		default:
+			fb.vals[in] = v
+		}
+		return nil
+	}
+	fb.vals[in] = fb.callRT("convert$"+mangle.Type(target), []sil.Type{t}, t, v)
+	return nil
+}
+
+func isNumber(t sil.Type) bool { return t == "int" || t == "float" }
 
 // Textual builtins for Go binary operators on int (and bool) operands.
 var intBinOps = map[token.Token]string{
@@ -500,6 +625,9 @@ func (fb *funcBuilder) binOp(in *ssa.BinOp) error {
 		if !ok {
 			return unsupported(in)
 		}
+		if b.Info()&types.IsString != 0 && in.Op == token.ADD {
+			return fb.stringConcat(in)
+		}
 		switch info := b.Info(); {
 		case info&types.IsInteger != 0:
 			name = intBinOps[in.Op]
@@ -507,7 +635,7 @@ func (fb *funcBuilder) binOp(in *ssa.BinOp) error {
 			name = floatBinOps[in.Op]
 		}
 		if name == "" && in.Op != token.AND_NOT {
-			return unsupported(in) // string concatenation, complex numbers
+			return unsupported(in) // complex numbers
 		}
 	}
 	x, err := fb.value(in.X)
@@ -529,6 +657,52 @@ func (fb *funcBuilder) binOp(in *ssa.BinOp) error {
 	return nil
 }
 
+func (fb *funcBuilder) stringConcat(in *ssa.BinOp) error {
+	x, err := fb.value(in.X)
+	if err != nil {
+		return err
+	}
+	y, err := fb.value(in.Y)
+	if err != nil {
+		return err
+	}
+	ts := fb.tr.tc.Type(in.Type())
+	fb.vals[in] = fb.callRT("string_concat", []sil.Type{ts, ts}, ts, x, y)
+	return nil
+}
+
+// invoke translates a call of an interface method. The callee is not
+// resolved: it is a declare named <mangle.Type(interface)>$<method> whose
+// first parameter is the interface value.
+func (fb *funcBuilder) invoke(in *ssa.Call) error {
+	cc := in.Common()
+	iface, ok := types.Unalias(cc.Value.Type()).(*types.Named)
+	if !ok {
+		return unsupported(in) // method of an unnamed interface type
+	}
+	recv, err := fb.value(cc.Value)
+	if err != nil {
+		return err
+	}
+	args, err := fb.values(cc.Args)
+	if err != nil {
+		return err
+	}
+	tc := fb.tr.tc
+	sig := cc.Signature()
+	params := []sil.Type{tc.Type(iface)}
+	for i := 0; i < sig.Params().Len(); i++ {
+		params = append(params, tc.Type(sig.Params().At(i).Type()))
+	}
+	name := mangle.Type(iface) + "$" + cc.Method.Name()
+	fb.ifaceDecls[name] = ifaceDecl{
+		goName: "(" + iface.String() + ")." + cc.Method.Name(),
+		decl:   sil.ProcDecl{Name: name, Params: params, Ret: tc.Type(sig.Results())},
+	}
+	fb.vals[in] = fb.let(sil.Call{Name: name, Args: append([]sil.Expr{recv}, args...)})
+	return nil
+}
+
 func (fb *funcBuilder) call(in *ssa.Call) error {
 	cc := in.Common()
 	if b, ok := cc.Value.(*ssa.Builtin); ok {
@@ -547,8 +721,11 @@ func (fb *funcBuilder) call(in *ssa.Call) error {
 		}
 		return unsupported(in) // len, append, ...
 	}
+	if cc.IsInvoke() {
+		return fb.invoke(in)
+	}
 	callee := cc.StaticCallee()
-	if cc.IsInvoke() || callee == nil {
+	if callee == nil {
 		return unsupported(in)
 	}
 	if _, ok := cc.Value.(*ssa.Function); !ok {

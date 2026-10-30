@@ -191,6 +191,7 @@ func TestTranslateUnsupported(t *testing.T) {
 		prefix + "Assert: unsupported *ssa.TypeAssert",
 		prefix + "CallFunc: unsupported *ssa.Call",
 		prefix + "ReadGlobal: unsupported *ssa.UnOp (operand *ssa.Global)",
+		prefix + "RuneString: unsupported *ssa.Convert",
 	}
 	got := strings.Split(strings.TrimSuffix(warn, "\n"), "\n")
 	sort.Strings(got)

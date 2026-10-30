@@ -11,7 +11,7 @@ import (
 
 // WriteTo は m を Textual として w に書く。型宣言、declare、define の順に出力する。
 // 同じ名前の型宣言と declare は、内容が同じなら最初の 1 つだけを出力し、
-// 内容が異なればエラーを返す。
+// 内容が異なればエラーを返す。同じ名前を declare と define の両方で出すこともエラーにする。
 func (m *Module) WriteTo(w io.Writer) (int64, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, ".source_language = %q\n", Lang)
@@ -56,6 +56,9 @@ func (m *Module) WriteTo(w io.Writer) (int64, error) {
 	for _, p := range m.Procs {
 		if seenProc[p.Name] {
 			return 0, fmt.Errorf("sil: define %s appears twice", p.Name)
+		}
+		if _, ok := seenDecl[p.Name]; ok {
+			return 0, fmt.Errorf("sil: %s is both declared and defined", p.Name)
 		}
 		seenProc[p.Name] = true
 		sb.WriteString("\n")
@@ -166,6 +169,8 @@ func exprString(e Expr) string {
 		return "null"
 	case Alloc:
 		return fmt.Sprintf("__sil_allocate(<%s>)", v.Type)
+	case Cast:
+		return fmt.Sprintf("__sil_cast(<%s>, %s)", v.Type, exprString(v.Val))
 	}
 	panic(fmt.Sprintf("sil: unknown expression %T", e))
 }

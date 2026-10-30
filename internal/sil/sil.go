@@ -117,6 +117,12 @@ type Null struct{}
 // Alloc は `__sil_allocate(<Type>)`。
 type Alloc struct{ Type string }
 
+// Cast は `__sil_cast(<Type>, Val)`。int と float の間の変換に使う。
+type Cast struct {
+	Type Type
+	Val  Expr
+}
+
 func (Ident) expr()      {}
 func (Var) expr()        {}
 func (FieldOf) expr()    {}
@@ -126,6 +132,7 @@ func (FloatConst) expr() {}
 func (StrConst) expr()   {}
 func (Null) expr()       {}
 func (Alloc) expr()      {}
+func (Cast) expr()       {}
 
 // Ret は `ret Val`。Val が nil なら `ret null` と出力する。
 type Ret struct{ Val Expr }

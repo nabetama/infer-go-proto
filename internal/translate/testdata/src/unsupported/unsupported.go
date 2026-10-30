@@ -16,3 +16,6 @@ func ReadGlobal() string {
 
 // CallFunc は関数の値を呼ぶ（呼び出し先が静的に決まらない *ssa.Call）。
 func CallFunc(f func() int) int { return f() }
+
+// RuneString は int から string への変換で、変換しない。
+func RuneString(r rune) string { return string(r) }

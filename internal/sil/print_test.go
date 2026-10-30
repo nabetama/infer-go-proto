@@ -121,6 +121,10 @@ func TestWriteToRejectsMalformedProcs(t *testing.T) {
 			{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: ret}}},
 			{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: ret}}},
 		}},
+		"defined and declared": {
+			Decls: []ProcDecl{{Name: "f", Ret: "void"}},
+			Procs: []Proc{{Name: "f", Ret: "void", Blocks: []Block{{Label: "b0", Term: ret}}}},
+		},
 	}
 	for name, m := range cases {
 		if _, err := m.WriteTo(&bytes.Buffer{}); err == nil {
@@ -148,5 +152,11 @@ func TestFloatConst(t *testing.T) {
 		if got := exprString(c.v); got != c.want {
 			t.Errorf("exprString(%v) = %q, want %q", float64(c.v), got, c.want)
 		}
+	}
+}
+
+func TestCast(t *testing.T) {
+	if got := exprString(Cast{Type: "float", Val: Ident("n0")}); got != "__sil_cast(<float>, n0)" {
+		t.Errorf("exprString(Cast) = %q", got)
 	}
 }
