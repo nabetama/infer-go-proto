@@ -158,9 +158,17 @@ func TestTranslateElems(t *testing.T) {
 	if d, ok := declNamed(m, "go::rt::convert$"+elemsPkg+"::ID"); !ok || !reflect.DeepEqual(d.Params, []sil.Type{"int"}) || d.Ret != "int" {
 		t.Errorf("convert$ID decl = %+v, %v", d, ok)
 	}
+	// int -> F (a float type): the argument is cast to the parameter type.
+	if d, ok := declNamed(m, "go::rt::convert$"+elemsPkg+"::F"); !ok || !reflect.DeepEqual(d.Params, []sil.Type{"float"}) || d.Ret != "float" {
+		t.Errorf("convert$F decl = %+v, %v", d, ok)
+	}
 	for _, d := range m.Decls {
-		if strings.HasPrefix(d.Name, "go::rt::convert$") && d.Name != "go::rt::convert$"+elemsPkg+"::ID" {
-			t.Errorf("unexpected conversion helper %s", d.Name)
+		switch d.Name {
+		case "go::rt::convert$" + elemsPkg + "::ID", "go::rt::convert$" + elemsPkg + "::F":
+		default:
+			if strings.HasPrefix(d.Name, "go::rt::convert$") {
+				t.Errorf("unexpected conversion helper %s", d.Name)
+			}
 		}
 	}
 	// A local array is a pointer to a *go::slice; a[:] and &a[i] load it,
@@ -184,9 +192,28 @@ func TestTranslateElems(t *testing.T) {
 		t.Errorf("ArrayToSlice has %d element addresses, want 2", elemAddrs)
 	}
 
-	if testing.Short() {
-		return
+	// A numeric element address is cast from **go::opaque to *int / *float.
+	ints, _ := procByName(m, elemsPkg+"::Ints")
+	casts := 0
+	for _, b := range ints.Blocks {
+		for _, in := range b.Instrs {
+			if l, ok := in.(sil.Let); ok {
+				if c, ok := l.Val.(sil.Cast); ok && c.Type == "*int" {
+					casts++
+				}
+			}
+		}
 	}
+	if casts != 2 {
+		t.Errorf("Ints has %d casts to *int, want 2", casts)
+	}
+}
+
+// The elems sample is captured without errors (numeric elements and
+// conversions included) and Pulse reports the expected flows.
+func TestTranslateElemsInfer(t *testing.T) {
+	infertest.Bin(t)
+	m, _ := translatePkgs(t, "./testdata/src/elems")
 	got := reported(t, runInfer(t, m, sourceSinkConfig(elemsPkg)), elemsPkg)
 	want := []string{"ArrayToSlice", "SliceParam", "ViaInvoke"}
 	if !reflect.DeepEqual(got, want) {

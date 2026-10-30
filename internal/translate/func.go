@@ -466,6 +466,12 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 			fb.vals[in] = fb.load(fb.tr.tc.Type(elem), addr)
 			return nil
 		}
+		if et := fb.tr.tc.Type(elem); isNumber(et) {
+			// The field is a *go::opaque and Infer rejects it where a *int
+			// or *float is expected, so the address is cast.
+			fb.vals[in] = fb.let(sil.Cast{Type: "*" + et, Val: fb.let(addr)})
+			return nil
+		}
 		fb.vals[in] = fb.let(addr)
 		return nil
 
@@ -566,12 +572,13 @@ func (fb *funcBuilder) convert(in ssa.Value, x ssa.Value) error {
 		return err
 	}
 	t := fb.tr.tc.Type(in.Type())
+	xt := fb.tr.tc.Type(x.Type())
 	target, ok := types.Unalias(in.Type()).(*types.Named)
 	if !ok {
 		// Infer rejects an int where a float is expected (and the other way
 		// round), so numbers are cast. Other conversions between a number
 		// and a pointer type (string(r)) are not translated.
-		switch xt := fb.tr.tc.Type(x.Type()); {
+		switch {
 		case xt == t:
 			fb.vals[in] = v
 		case isNumber(xt) && isNumber(t):
@@ -582,6 +589,10 @@ func (fb *funcBuilder) convert(in ssa.Value, x ssa.Value) error {
 			fb.vals[in] = v
 		}
 		return nil
+	}
+	if xt != t && isNumber(xt) && isNumber(t) {
+		// Infer rejects an int argument for a float parameter.
+		v = fb.let(sil.Cast{Type: t, Val: v})
 	}
 	fb.vals[in] = fb.callRT("convert$"+mangle.Type(target), []sil.Type{t}, t, v)
 	return nil

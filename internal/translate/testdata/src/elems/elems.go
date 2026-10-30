@@ -51,3 +51,21 @@ func ToFloat(n int) float64 {
 	x := float64(n)
 	return x * 2
 }
+
+// Ints は数値を要素に持つ slice の読み書き。
+func Ints(xs []int) int {
+	xs[0] = 1
+	return xs[1]
+}
+
+// Floats は数値を要素に持つ配列の読み書き。
+func Floats() float64 {
+	var a [2]float64
+	a[0] = 1.5
+	return a[1]
+}
+
+type F float64
+
+// ToF は、数値の型が変わる名前付きの型への変換（int から F）。
+func ToF(n int) F { return F(n) }
