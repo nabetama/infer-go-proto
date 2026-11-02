@@ -307,7 +307,7 @@ func (fb *funcBuilder) allocStruct(t types.Type, st *types.Struct) sil.Ident {
 	id := fb.let(sil.Alloc{Type: name})
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
-		addr := sil.FieldOf{Base: id, Type: name, Field: f.Name()}
+		addr := sil.FieldOf{Base: id, Type: name, Field: fieldName(st, i)}
 		ft := fb.tr.tc.Type(f.Type())
 		var v sil.Expr
 		if inner, ok := structOf(f.Type()); ok {
@@ -327,8 +327,8 @@ func (fb *funcBuilder) copyStruct(t types.Type, st *types.Struct, dst, src sil.E
 	for i := 0; i < st.NumFields(); i++ {
 		f := st.Field(i)
 		ft := fb.tr.tc.Type(f.Type())
-		d := sil.FieldOf{Base: dst, Type: name, Field: f.Name()}
-		s := sil.FieldOf{Base: src, Type: name, Field: f.Name()}
+		d := sil.FieldOf{Base: dst, Type: name, Field: fieldName(st, i)}
+		s := sil.FieldOf{Base: src, Type: name, Field: fieldName(st, i)}
 		if inner, ok := structOf(f.Type()); ok {
 			fb.copyStruct(f.Type(), inner, fb.load(ft, d), fb.load(ft, s))
 			continue
@@ -429,8 +429,9 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 			return err
 		}
 		st := deref(in.X.Type())
-		f := st.Underlying().(*types.Struct).Field(in.Field)
-		addr := sil.FieldOf{Base: x, Type: fb.structName(st), Field: f.Name()}
+		ust := st.Underlying().(*types.Struct)
+		f := ust.Field(in.Field)
+		addr := sil.FieldOf{Base: x, Type: fb.structName(st), Field: fieldName(ust, in.Field)}
 		if _, ok := structOf(f.Type()); ok {
 			// The field holds a pointer to the inner struct's storage,
 			// which is the address of the inner struct.
@@ -446,8 +447,9 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 			return err
 		}
 		st := in.X.Type()
-		f := st.Underlying().(*types.Struct).Field(in.Field)
-		addr := sil.FieldOf{Base: x, Type: fb.structName(st), Field: f.Name()}
+		ust := st.Underlying().(*types.Struct)
+		f := ust.Field(in.Field)
+		addr := sil.FieldOf{Base: x, Type: fb.structName(st), Field: fieldName(ust, in.Field)}
 		fb.vals[in] = fb.load(fb.tr.tc.Type(f.Type()), addr)
 		return nil
 
@@ -498,7 +500,13 @@ func (fb *funcBuilder) instr(instr ssa.Instruction) error {
 		if err != nil {
 			return err
 		}
-		fb.vals[in] = fb.callRT("make_iface", []sil.Type{fb.tr.tc.runtime(tyOpaque)}, fb.tr.tc.runtime(tyIface), x)
+		opaque := fb.tr.tc.runtime(tyOpaque)
+		// Textual rejects a pointer to a pointer (**go::string for a
+		// *string) where *go::opaque is expected, so it is cast first.
+		if strings.HasPrefix(string(fb.tr.tc.Type(in.X.Type())), "**") {
+			x = fb.let(sil.Cast{Type: opaque, Val: x})
+		}
+		fb.vals[in] = fb.callRT("make_iface", []sil.Type{opaque}, fb.tr.tc.runtime(tyIface), x)
 		return nil
 
 	case *ssa.ChangeType:

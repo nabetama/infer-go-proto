@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -217,6 +218,33 @@ func TestTranslateElemsInfer(t *testing.T) {
 	got := reported(t, runInfer(t, m, sourceSinkConfig(elemsPkg)), elemsPkg)
 	want := []string{"ArrayToSlice", "SliceParam", "ViaInvoke"}
 	if !reflect.DeepEqual(got, want) {
+		t.Errorf("reported %v, want %v", got, want)
+	}
+}
+
+const ifacePtrPkg = "github_com::nabetama::infer_go_proto::internal::translate::testdata::src::ifaceptr"
+
+// A pointer to a non-struct value (**go::string, **go::slice in Textual) is
+// cast to *go::opaque before go::rt::make_iface. Without the cast, capture
+// fails with "expression n8 has type **go::string, while a subtype of
+// *go::opaque was expected".
+func TestTranslateIfacePtrInfer(t *testing.T) {
+	infertest.Bin(t)
+	m, warn := translatePkgs(t, "./testdata/src/ifaceptr")
+	if warn != "" {
+		t.Errorf("warnings:\n%s", warn)
+	}
+	sinkAny := `{ "procedure_regex": "^` + ifacePtrPkg + `::SinkAny$" }`
+	for _, name := range []string{"StringPtr", "SlicePtr"} {
+		p, ok := procByName(m, ifacePtrPkg+"::"+name)
+		if !ok || !strings.Contains(fmt.Sprint(p.Blocks), "*go::opaque") {
+			t.Errorf("%s: no cast to *go::opaque: %+v", name, p.Blocks)
+		}
+	}
+	// StringPtr passes a pointer whose pointee is tainted; the pointer value
+	// itself is not tainted and Pulse does not report it.
+	got := reported(t, runInfer(t, m, sourceSinkConfig(ifacePtrPkg, sinkAny)), ifacePtrPkg)
+	if want := []string{"Value"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reported %v, want %v", got, want)
 	}
 }

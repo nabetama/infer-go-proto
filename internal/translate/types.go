@@ -133,11 +133,22 @@ func (c *typeConv) structType(name string, st *types.Struct) sil.Type {
 		fields := make([]sil.Field, st.NumFields())
 		for i := range fields {
 			f := st.Field(i)
-			fields[i] = sil.Field{Name: f.Name(), Type: c.Type(f.Type())}
+			fields[i] = sil.Field{Name: fieldName(st, i), Type: c.Type(f.Type())}
 		}
 		c.decls[name] = sil.TypeDecl{Name: name, Fields: fields}
 	}
 	return sil.Type("*" + name)
+}
+
+// fieldName returns the Textual name of field i of st. Textual does not
+// accept "_" as a field name, and a struct may have several blank fields, so
+// a blank field is named blank$<i>. Go identifiers cannot contain '$', so
+// the name does not collide with another field.
+func fieldName(st *types.Struct, i int) string {
+	if n := st.Field(i).Name(); n != "_" {
+		return n
+	}
+	return fmt.Sprintf("blank$%d", i)
 }
 
 // anonStructName names an unnamed struct type after its Go spelling.

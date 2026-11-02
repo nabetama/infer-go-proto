@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/tools/go/ssa"
 
+	"github.com/nabetama/infer-go-proto/internal/infertest"
 	"github.com/nabetama/infer-go-proto/internal/sil"
 )
 
@@ -133,5 +134,28 @@ func TestTypeExternalGeneric(t *testing.T) {
 	// Types reachable through fields are declared as well.
 	if _, ok := declByName(tc.Decls(), "github_com::nabetama::infer_go_proto::internal::translate::testdata::src::structs::User"); !ok {
 		t.Error("User not declared transitively")
+	}
+}
+
+func TestTypeBlankFields(t *testing.T) {
+	m, warn := translatePkgs(t, "./testdata/src/blank")
+	if warn != "" {
+		t.Fatalf("warnings:\n%s", warn)
+	}
+	d, ok := declByName(m.Types, "github_com::nabetama::infer_go_proto::internal::translate::testdata::src::blank::Padded")
+	if !ok {
+		t.Fatal("Padded not declared")
+	}
+	var names []string
+	for _, f := range d.Fields {
+		names = append(names, f.Name)
+	}
+	if want := []string{"blank$0", "A", "blank$2"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("fields = %v, want %v", names, want)
+	}
+	// Textual rejects "_" as a field name (SIL syntax error: unexpected token _).
+	path, _ := writeSil(t, m)
+	if err := infertest.Capture(t, []string{path}); err != nil {
+		t.Fatal(err)
 	}
 }
