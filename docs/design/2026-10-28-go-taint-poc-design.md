@@ -144,6 +144,16 @@ Go のソース
 - `fmt.Sprintf` は `fmt::Sprintf` という本体つきのモデルにする（`internal/translate/models.go`）。format と `args.go::slice.elem` を `go::rt::string_concat` でつないで返す。args が nil（可変長引数がない呼び出し）のときは format を返す。モデルのある関数は `declare` を出さない。`sil.WriteTo` は、同じ名前を `declare` と `define` の両方で出すとエラーを返す。
 - 取り込みは、呼び出しの引数の型が宣言の引数の型と違っても（`int` を `*go::string` の引数に渡す）、`*go::iface` の値を `*go::opaque` のフィールドに `store` しても、エラーを出さなかった。一方、`int` と `float` の不一致（`store`、`ret`、呼び出しの引数）と、`**go::opaque` と `*float` の不一致はエラーになる。引数の型が呼び出しごとに違っても宣言が 1 つで済むよう、`go::rt::make_iface` の宣言は引数の型を `*go::opaque` に固定している。
 
+#### 本物のライブラリを使うサンプルで確かめたこと（2026-11-02、計画の Task 8）
+
+- go2sil に渡すパッケージは `./examples/connectsvc`、`./examples/grpcsvc`、`./examples/userrepo` の 3 つにし、`./examples/...` にはしない。`./examples/...` にすると生成コード（`examples/gen/...`）も変換の対象になり、`ProtoReflect`、`Reset`、`String`、`file_user_v1_user_proto_init` などがパッケージの変数（`*ssa.Global`）や型アサーションのために警告になる。サンプルが呼ぶのは `GetName()` などの getter だけで、対象外のパッケージの関数は本体のない宣言として出力され、引数の taint が戻り値に伝わる（Task 1 の `TestProbeUnknownCallPropagates`）。
+- 名前が `_` のフィールドは、Textual では `SIL syntax error: unexpected token _` で取り込みが失敗する。`sync.Mutex` や生成された message の型が `_` のフィールドを持つ。`_` のフィールドは `blank$<フィールドの番号>` という名前で出力する（`internal/translate/types.go` の `fieldName`）。Go の識別子は `$` を含まないので、他のフィールドの名前と一致しない。
+- `Scan(ctx, &name)` の `&name` のように、struct 以外の値へのポインタ（Textual では `**go::string`、`**go::slice`）を `go::rt::make_iface` に渡すと、`expression n8 has type **go::string, while a subtype of *go::opaque was expected` で取り込みが失敗する。Textual の型が `**` で始まる値は、`__sil_cast(<*go::opaque>, x)` にしてから渡す。
+- `ArgumentsMatchingTypes` は部分文字列で比べるので、「`...::gen::user::v1::` 配下で名前が `Request` で終わる型」は 1 つの文字列では書けない。`.inferconfig` では `GetUserRequest`、`SearchUsersRequest` をパッケージを含めた名前で 1 つずつ書く。message を足したら `.inferconfig` にも足す。
+- 入力元の `"procedure_regex": ".*"` は、本体のない宣言の呼び出しにも当てはまる。`GetUserBad` の報告の qualifier は `` `go::rt::string_concat()` is tainted by value passed as argument `#0` to `...::v1::GetUserRequest$GetName` `` で、`*GetUserRequest` を引数に取る `GetName` の呼び出しが入力元として扱われている。他の 3 件の qualifier はハンドラの `req`（引数 `#2`）を入力元として示している。
+- `SearchUsersSafeBad` は、`bun.Safe` への変換（`go::rt::convert$github_com::uptrace::bun::schema::Safe`）と `OrderExpr` の両方で報告され、report.json に 2 件出る。e2e テストは関数名の集合で比べるので 1 つになる。
+- `Repo.FindByName` は `string` を受け取るだけで入力元の型の引数を持たないので、報告は呼び出し元の `GetUserViaRepoBad` にだけ出る。
+
 ### 関数名の変換規則
 
 Infer の設定は関数名で入力元と危険な関数を指定する。そのため、Go の関数・メソッドを `.sil` 上でどんな名前にするかが設計の中心になる。次の条件を満たす規則にする。
