@@ -3,6 +3,7 @@ package grpcsvc
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/uptrace/bun"
@@ -12,12 +13,13 @@ import (
 
 // Server serves SearchUsers.
 type Server struct {
-	db *bun.DB
+	db    *bun.DB
+	sqlDB *sql.DB
 }
 
 // New returns a Server.
-func New(db *bun.DB) *Server {
-	return &Server{db: db}
+func New(db *bun.DB, sqlDB *sql.DB) *Server {
+	return &Server{db: db, sqlDB: sqlDB}
 }
 
 // SearchUsersBad formats the requested order into the SQL string.
@@ -57,4 +59,43 @@ func (s *Server) SearchUsersSafeBad(ctx context.Context, req *userv1.SearchUsers
 		return nil, err
 	}
 	return &userv1.SearchUsersResponse{Names: names}, nil
+}
+
+// SearchUsersSQLBad concatenates the requested order into the SQL string
+// given to database/sql.
+//
+// want: TAINT_ERROR
+func (s *Server) SearchUsersSQLBad(ctx context.Context, req *userv1.SearchUsersRequest) (*userv1.SearchUsersResponse, error) {
+	rows, err := s.sqlDB.QueryContext(ctx, "SELECT name FROM users ORDER BY "+req.OrderBy)
+	if err != nil {
+		return nil, err
+	}
+	return scanNames(rows)
+}
+
+// SearchUsersSQLGood passes the request's value as a placeholder argument
+// to database/sql.
+//
+// want: none
+func (s *Server) SearchUsersSQLGood(ctx context.Context, req *userv1.SearchUsersRequest) (*userv1.SearchUsersResponse, error) {
+	rows, err := s.sqlDB.QueryContext(ctx, "SELECT name FROM users WHERE name = ?", req.OrderBy)
+	if err != nil {
+		return nil, err
+	}
+	return scanNames(rows)
+}
+
+// scanNames returns the first name in rows.
+func scanNames(rows *sql.Rows) (*userv1.SearchUsersResponse, error) {
+	var name string
+	if rows.Next() {
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, err
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return &userv1.SearchUsersResponse{Names: []string{name}}, nil
 }

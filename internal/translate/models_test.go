@@ -1,7 +1,6 @@
 package translate
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -237,8 +236,8 @@ func TestTranslateIfacePtrInfer(t *testing.T) {
 	sinkAny := `{ "procedure_regex": "^` + ifacePtrPkg + `::SinkAny$" }`
 	for _, name := range []string{"StringPtr", "SlicePtr"} {
 		p, ok := procByName(m, ifacePtrPkg+"::"+name)
-		if !ok || !strings.Contains(fmt.Sprint(p.Blocks), "*go::opaque") {
-			t.Errorf("%s: no cast to *go::opaque: %+v", name, p.Blocks)
+		if !ok || !hasCast(p, "*go::opaque") {
+			t.Errorf("%s: no __sil_cast(<*go::opaque>, ...): %+v", name, p.Blocks)
 		}
 	}
 	// StringPtr passes a pointer whose pointee is tainted; the pointer value
@@ -247,4 +246,18 @@ func TestTranslateIfacePtrInfer(t *testing.T) {
 	if want := []string{"Value"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reported %v, want %v", got, want)
 	}
+}
+
+// hasCast reports whether p has an instruction nK = __sil_cast(<typ>, ...).
+func hasCast(p sil.Proc, typ sil.Type) bool {
+	for _, b := range p.Blocks {
+		for _, in := range b.Instrs {
+			if l, ok := in.(sil.Let); ok {
+				if c, ok := l.Val.(sil.Cast); ok && c.Type == typ {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

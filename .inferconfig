@@ -4,8 +4,7 @@
       "procedure_regex": ".*",
       "taint_target": ["ArgumentsMatchingTypes", [
         "connectrpc_com::connect::Request",
-        "github_com::nabetama::infer_go_proto::examples::gen::user::v1::GetUserRequest",
-        "github_com::nabetama::infer_go_proto::examples::gen::user::v1::SearchUsersRequest"
+        "github_com::nabetama::infer_go_proto::examples::gen::user::v1::"
       ]]
     }
   ],
@@ -15,8 +14,8 @@
     { "procedure_regex": "^github_com::uptrace::bun::SelectQuery\\$ColumnExpr$", "taint_target": ["ArgumentPositions", [1]] },
     { "procedure_regex": "^github_com::uptrace::bun::SelectQuery\\$OrderExpr$", "taint_target": ["ArgumentPositions", [1]] },
     { "procedure_regex": "^github_com::uptrace::bun::DB\\$NewRaw$", "taint_target": ["ArgumentPositions", [1]] },
-    { "procedure_regex": "^database_sql::DB\\$QueryContext$", "taint_target": ["ArgumentPositions", [2]] },
-    { "procedure_regex": "^database_sql::DB\\$ExecContext$", "taint_target": ["ArgumentPositions", [2]] },
+    { "procedure_regex": "^database::sql::DB\\$QueryContext$", "taint_target": ["ArgumentPositions", [2]] },
+    { "procedure_regex": "^database::sql::DB\\$ExecContext$", "taint_target": ["ArgumentPositions", [2]] },
     { "procedure_regex": "^go::rt::convert\\$github_com::uptrace::bun::schema::Safe$" }
   ]
 }
