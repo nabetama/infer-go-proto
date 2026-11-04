@@ -173,6 +173,7 @@ Infer の設定は関数名で入力元と危険な関数を指定する。そ�
 成功の条件のサンプルを `.sil` に変換するのに必要な範囲に限る。
 
 - 対象にする: 関数とメソッドの定義と呼び出し、引数と戻り値（複数の戻り値を含む）、ローカル変数、`if` と `for`（SSA の基本ブロックと分岐）、構造体のポインタとフィールドの読み書き、文字列の定数と連結、インタフェースを通したメソッド呼び出し（呼び出し先を静的に決められるものだけ）。
+  - 2026-11-04 追記: 実装では、インタフェースを通したメソッド呼び出しの呼び出し先を探さない（「可変長引数・インタフェース・型の変換で確かめたこと」）。`<インタフェースの型の名前>$<メソッド名>` という本体のない宣言を呼ぶので、実装のメソッドの本体は解析されず、実装の中で危険な関数に渡しても報告されない（`func ViaIface(f Finder) { f.Find(Source()) }` は、`Finder` の実装が 1 つだけでも報告されなかった）。`bun.IDB` のようなインタフェースを通した呼び出しは `github_com::uptrace::bun::IDB$NewRaw` のような名前になり、`.inferconfig` の危険な関数に一致しない。
 - 可変長引数の受け渡しも対象にする。`fmt.Sprintf(format, x)` や `Where("id = ?", x)` は、SSA では `[]any` の確保（`Alloc`）、要素のアドレス（`IndexAddr`）と `Store`、`Slice`、インタフェースへの変換（`MakeInterface`）になる。成功の条件のサンプルで必ず出てくるため、これらの命令は変換する。外部入力の taint が `fmt.Sprintf` の戻り値に伝わるよう、slice の要素から戻り値へ taint を流すモデルを用意する（設計時の判断）。
 - 名前付きの型への変換（`bun.Safe(s)` のような、SSA の `ChangeType` / `Convert`）は、変換先の型ごとに決まった名前の、本体のない関数の呼び出しとして `.sil` に出力する。これによって、型への変換も関数名で危険な関数に指定できる。この出力は Go のコードにある変換命令ひとつずつに対応しているので、「Go のコードを見ずに報告を出す仕組み」には当たらない（設計時の判断）。
 - 対象にしない: goroutine、channel、`select`、`defer`、`panic`/`recover`、map、可変長引数以外の slice の操作（必要になったら本体のない宣言の呼び出しに置き換える）、reflect。
@@ -206,6 +207,9 @@ Infer の設定は関数名で入力元と危険な関数を指定する。そ�
 
 - パッケージのパス（`mangle.Pkg`）: `/` を `::`、`.` と `-` を `_` に置き換える。`database/sql` は `database::sql`、`github.com/uptrace/bun` は `github_com::uptrace::bun`。
 - 名前付きの型（`mangle.Type`）: `<パッケージ>::<型名>`。ジェネリクスの型は、型引数ごとに `$` を前に付け、最後に `$` を付ける。`connect.Request[GetUserRequest]` は `connectrpc_com::connect::Request$<型引数の名前>$`。
+  - 2026-11-04 追記: ポインタの型引数は `ptr_` を前に付ける（`Request[*T]` は `Request$ptr_<T の名前>$`）。以前はポインタを外していたので、`Request[*T]` と `Request[T]` が同じ名前になっていた。`ptr_` は複数の戻り値を入れる型の名前と同じ書き方。
+  - 2026-11-04 追記: 関数の中で宣言した型は、型名の後に `$<関数名>` を付ける。メソッドの中なら `$<レシーバの型名>$<メソッド名>`。同じ関数（その中の関数リテラルを含む）に同名の型が複数あれば、さらにソースの順に `$1`、`$2` を付ける（`internal/mangle/mangle.go` の `localSuffix`）。以前は関数の中の型にも `<パッケージ>::<型名>` を使っていたので、別々の関数の `type row struct{ ID int }` と `type row struct{ Name string }` が同じ名前になり、型の宣言が 1 つしか出力されず、`infer capture` が `field ...row.Name is not declared` で失敗していた。Go の識別子は `$` を含まないので、パッケージの型と同じ名前にはならない。
+- 型の名前の衝突（2026-11-04 追記）: `typeConv` は、struct の型の宣言ごとに元の Go の型を覚える。同じ名前に `types.Identical` でない 2 つの Go の型が対応したら、`Translate` はエラーを返し、go2sil は `go2sil: types <型> and <型> both map to the Textual type "<名前>"` を出して終了コード 1 で終わる。名前を変えても衝突が残る例: パッケージのパスの `.` と `_` の違い（`example.com/a.b` と `example.com/a_b` の同名の型）、無名の struct の名前（`struct{X_ *int}` と `struct{X []int}` はどちらも `go::struct$struct_X___int_$`）。
 - パッケージの関数（`mangle.Func`）: `<パッケージ>::<関数名>`。ジェネリクスの関数は `<パッケージ>::<関数名>$<型引数>$`。
 - メソッド: `<レシーバの型の名前>$<メソッド名>`（ポインタレシーバのポインタは外す）。例: `github_com::uptrace::bun::SelectQuery$Where`。
 - 関数リテラル: 親の名前に go/ssa の名前の続き（`$1` など）を付ける。
