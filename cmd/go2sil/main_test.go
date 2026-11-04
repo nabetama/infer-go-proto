@@ -94,3 +94,15 @@ func TestTypeNameCollision(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q stdout=%.40q", code, stderr, stdout)
 	}
 }
+
+func TestNoPackagesMatched(t *testing.T) {
+	// docs/ has no Go files, so ./docs/... matches no package.
+	out := filepath.Join(t.TempDir(), "out.sil")
+	code, _, stderr := runCmd(t, "-C", filepath.Join("..", ".."), "-o", out, "./docs/...")
+	if code != 1 || !strings.HasPrefix(stderr, "go2sil: ") || !strings.Contains(stderr, "no packages") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("output file created on failure")
+	}
+}

@@ -12,7 +12,8 @@ import (
 
 // Load loads the packages matching patterns (relative to dir) together with
 // their dependencies and builds SSA for all of them. It returns an error if
-// any package has a load or type error.
+// any package has a load or type error, or if the patterns match no package
+// (for example "./docs/..." when docs has no Go files).
 func Load(patterns []string, dir string) (*ssa.Program, []*ssa.Package, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedTypes |
@@ -22,6 +23,9 @@ func Load(patterns []string, dir string) (*ssa.Program, []*ssa.Package, error) {
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
 		return nil, nil, err
+	}
+	if len(pkgs) == 0 {
+		return nil, nil, fmt.Errorf("no packages match %s", strings.Join(patterns, " "))
 	}
 	var msgs []string
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
