@@ -61,6 +61,25 @@ func (s *Server) SearchUsersSafeBad(ctx context.Context, req *userv1.SearchUsers
 	return &userv1.SearchUsersResponse{Names: names}, nil
 }
 
+// SearchUsersSafeArgBad passes the requested name as a placeholder
+// argument, but wrapped in bun.Safe, so bun writes it into the SQL string
+// without quoting. Only the bun.Safe conversion is a sink here: the query
+// string given to Where is a constant.
+//
+// want: TAINT_ERROR
+func (s *Server) SearchUsersSafeArgBad(ctx context.Context, req *userv1.SearchUsersRequest) (*userv1.SearchUsersResponse, error) {
+	var names []string
+	err := s.db.NewSelect().
+		Table("users").
+		Column("name").
+		Where("name = ?", bun.Safe(req.OrderBy)).
+		Scan(ctx, &names)
+	if err != nil {
+		return nil, err
+	}
+	return &userv1.SearchUsersResponse{Names: names}, nil
+}
+
 // SearchUsersSQLBad concatenates the requested order into the SQL string
 // given to database/sql.
 //

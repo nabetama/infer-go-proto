@@ -10,7 +10,7 @@ Infer は Go に対応していないが、`.sil` を `infer capture --capture-t
 - 危険な関数（SQL の文字列を受け取る引数）: bun の `(*bun.DB).NewRaw`、`(*bun.SelectQuery).Where` / `WhereOr` / `ColumnExpr` / `OrderExpr` の第 1 引数、`bun.Safe` への変換、`database/sql` の `(*sql.DB).QueryContext` / `ExecContext` のクエリ文字列。
 - 報告しない: 外部入力をプレースホルダ `?` に対応する `args` に渡す書き方。
 
-`examples/` のサンプルでは、`GetUserBad`、`GetUserViaRepoBad`、`SearchUsersBad`、`SearchUsersSQLBad`、`SearchUsersSafeBad` が報告され、`args` に渡す書き方の対は報告されない。
+`examples/` のサンプルでは、`GetUserBad`、`GetUserViaRepoBad`、`SearchUsersBad`、`SearchUsersSQLBad`、`SearchUsersSafeBad`、`SearchUsersSafeArgBad` が報告され、`args` に渡す書き方の対は報告されない。
 
 ## Infer のインストール
 
