@@ -25,11 +25,22 @@ type typeConv struct {
 	// seen holds the names whose declaration is built or being built, so
 	// recursive types terminate.
 	seen map[string]bool
+	// goTypes holds the Go type each struct declaration was built from.
+	goTypes map[string]types.Type
+	// err is the first name collision found (see Err).
+	err error
 }
 
 func newTypeConv() *typeConv {
-	return &typeConv{decls: map[string]sil.TypeDecl{}, seen: map[string]bool{}}
+	return &typeConv{decls: map[string]sil.TypeDecl{}, seen: map[string]bool{}, goTypes: map[string]types.Type{}}
 }
+
+// Err returns an error if two Go struct types that are not types.Identical
+// were converted to the same Textual name (for example the packages
+// "example.com/a.b" and "example.com/a_b" both declaring T). Only one
+// declaration per name is emitted, so Infer would reject the fields of the
+// other type.
+func (c *typeConv) Err() error { return c.err }
 
 // Type returns the Textual type of t and records the declarations it needs.
 //
@@ -64,11 +75,11 @@ func (c *typeConv) Type(t types.Type) sil.Type {
 		return c.runtime(tyOpaque)
 	case *types.Named:
 		if st, ok := t.Underlying().(*types.Struct); ok {
-			return c.structType(mangle.Type(t), st)
+			return c.structType(mangle.Type(t), t, st)
 		}
 		return c.Type(t.Underlying())
 	case *types.Struct:
-		return c.structType(anonStructName(t), t)
+		return c.structType(anonStructName(t), t, t)
 	case *types.Pointer:
 		elem := types.Unalias(t.Elem())
 		if isStruct(elem) {
@@ -127,7 +138,14 @@ func (c *typeConv) runtime(name string) sil.Type {
 	return sil.Type("*" + name)
 }
 
-func (c *typeConv) structType(name string, st *types.Struct) sil.Type {
+func (c *typeConv) structType(name string, t types.Type, st *types.Struct) sil.Type {
+	if prev, ok := c.goTypes[name]; ok {
+		if c.err == nil && !types.Identical(prev, t) {
+			c.err = fmt.Errorf("types %s and %s both map to the Textual type %q", prev, t, name)
+		}
+	} else {
+		c.goTypes[name] = t
+	}
 	if !c.seen[name] {
 		c.seen[name] = true // before the fields, so that recursive types terminate
 		fields := make([]sil.Field, st.NumFields())

@@ -86,3 +86,11 @@ func TestNoPatterns(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
+
+func TestTypeNameCollision(t *testing.T) {
+	dir := filepath.Join("..", "..", "internal", "translate", "testdata", "src", "dotpkg")
+	code, stdout, stderr := runCmd(t, "-C", dir, "./a.b", "./a_b")
+	if code != 1 || !strings.HasPrefix(stderr, "go2sil: types ") || !strings.Contains(stderr, "both map to") || stdout != "" {
+		t.Fatalf("code=%d stderr=%q stdout=%.40q", code, stderr, stdout)
+	}
+}

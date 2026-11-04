@@ -159,3 +159,56 @@ func TestTypeBlankFields(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+const localPkg = "github_com::nabetama::infer_go_proto::internal::translate::testdata::src::localtypes"
+
+func TestTypeLocalTypesGetDistinctNames(t *testing.T) {
+	m, warn := translatePkgs(t, "./testdata/src/localtypes")
+	if warn != "" {
+		t.Fatalf("warnings:\n%s", warn)
+	}
+	for name, field := range map[string]string{localPkg + "::row$F": "ID", localPkg + "::row$G": "Name"} {
+		d, ok := declByName(m.Types, name)
+		if !ok || len(d.Fields) != 1 || d.Fields[0].Name != field {
+			t.Errorf("decl %s = %v, %v", name, d, ok)
+		}
+	}
+	path, _ := writeSil(t, m)
+	if err := infertest.Capture(t, []string{path}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTranslateTypeNameCollision(t *testing.T) {
+	_, pkgs, err := Load([]string{"./testdata/src/dotpkg/a.b", "./testdata/src/dotpkg/a_b"}, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Translate(pkgs, nil)
+	want := "github_com::nabetama::infer_go_proto::internal::translate::testdata::src::dotpkg::a_b::T"
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want a collision error naming %s", err, want)
+	}
+}
+
+func TestTypeAnonStructCollision(t *testing.T) {
+	// struct{X_ *int} and struct{X []int} are both spelled
+	// go::struct$struct_X___int_$.
+	field := func(name string, typ types.Type) *types.Var { return types.NewField(0, nil, name, typ, false) }
+	s1 := types.NewStruct([]*types.Var{field("X_", types.NewPointer(types.Typ[types.Int]))}, nil)
+	s2 := types.NewStruct([]*types.Var{field("X", types.NewSlice(types.Typ[types.Int]))}, nil)
+	tc := newTypeConv()
+	if a, b := tc.Type(s1), tc.Type(s2); a != b {
+		t.Fatalf("test premise: names differ: %s, %s", a, b)
+	}
+	if tc.Err() == nil {
+		t.Fatal("want a collision error")
+	}
+	// The same type twice is not a collision.
+	tc = newTypeConv()
+	tc.Type(s1)
+	tc.Type(types.NewStruct([]*types.Var{field("X_", types.NewPointer(types.Typ[types.Int]))}, nil))
+	if err := tc.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
