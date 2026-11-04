@@ -225,3 +225,87 @@ func TestFuncBoundAndThunk(t *testing.T) {
 		}
 	}
 }
+
+func TestTypePointerArgIsDistinct(t *testing.T) {
+	val := reqOf("GetUserRequest")
+	args := val.(*types.Named).TypeArgs()
+	ptrInst, err := types.Instantiate(nil, val.(*types.Named).Origin(), []types.Type{types.NewPointer(args.At(0))}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Type(ptrInst)
+	assertEq(t, got, "connectrpc_com::connect::Request$ptr_example_com::x::pb::GetUserRequest$")
+	if got == Type(val) {
+		t.Error("Request[*T] and Request[T] must give different names")
+	}
+}
+
+const localSrc = `package p
+
+type S struct{}
+
+func F() any {
+	type row struct{ ID int }
+	return row{}
+}
+
+func G() any {
+	type row struct{ Name string }
+	return row{}
+}
+
+func (S) M() any {
+	type row struct{ X bool }
+	return row{}
+}
+
+func H() (any, any) {
+	var a, b any
+	{
+		type row struct{ A int }
+		a = row{}
+	}
+	{
+		type row struct{ B int }
+		b = row{}
+	}
+	return a, b
+}
+
+type row struct{ Top int }
+`
+
+// localRows returns the types named "row" declared in localSrc, keyed by the
+// first field name.
+func localRows(t *testing.T) map[string]types.Type {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "p.go", localSrc, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}}
+	if _, err := (&types.Config{}).Check("example.com/p", fset, []*ast.File{f}, info); err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]types.Type{}
+	for _, obj := range info.Defs {
+		if tn, ok := obj.(*types.TypeName); ok && tn.Name() == "row" {
+			st := tn.Type().Underlying().(*types.Struct)
+			rows[st.Field(0).Name()] = tn.Type()
+		}
+	}
+	return rows
+}
+
+func TestTypeLocal(t *testing.T) {
+	rows := localRows(t)
+	assertEq(t, Type(rows["Top"]), "example_com::p::row")
+	assertEq(t, Type(rows["ID"]), "example_com::p::row$F")
+	assertEq(t, Type(rows["Name"]), "example_com::p::row$G")
+	assertEq(t, Type(rows["X"]), "example_com::p::row$S$M")
+	// Two local types with the same name in one function are numbered in
+	// source order.
+	assertEq(t, Type(rows["A"]), "example_com::p::row$H$1")
+	assertEq(t, Type(rows["B"]), "example_com::p::row$H$2")
+}

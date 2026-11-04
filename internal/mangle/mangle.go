@@ -8,7 +8,9 @@ package mangle
 import (
 	"fmt"
 	"go/types"
+	"sort"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -23,7 +25,9 @@ func RT(name string) string { return "go::rt::" + name }
 
 // Type returns the identifier of a named type (a pointer is stripped first).
 // A generic instance becomes Pkg::Name$<arg1>$<arg2>$ : each type argument is
-// followed by '$'. Basic type arguments use the Go name. Type panics for
+// followed by '$'. Basic type arguments use the Go name, and a pointer type
+// argument is "ptr_" followed by its element. A type declared inside a
+// function gets the suffix described at localSuffix. Type panics for
 // types that are not named, pointer-to-named or basic.
 func Type(t types.Type) string {
 	t = types.Unalias(t)
@@ -42,9 +46,96 @@ func Type(t types.Type) string {
 func named(obj *types.TypeName, args *types.TypeList) string {
 	name := obj.Name()
 	if obj.Pkg() != nil {
-		name = Pkg(obj.Pkg().Path()) + "::" + name
+		name = Pkg(obj.Pkg().Path()) + "::" + name + localSuffix(obj)
 	}
 	return name + typeArgs(args)
+}
+
+var localSuffixes sync.Map // *types.TypeName -> string
+
+// localSuffix returns "" for a package-level type, and for a type that is
+// not in any scope (types built by hand). For a type declared inside a
+// function it returns "$<function>", where <function> is the name
+// of the enclosing top-level function, or "<receiver type>$<method>" for a
+// method. When the function declares several types of the same name (in
+// different blocks or function literals), "$<n>" is appended, n being the
+// 1-based position of the declaration in source order. If the enclosing
+// function cannot be found, the suffix is "$local". Translate reports an error when two different types
+// end up with the same name.
+func localSuffix(obj *types.TypeName) string {
+	pkg := obj.Pkg()
+	if obj.Parent() == nil || obj.Parent() == pkg.Scope() {
+		return ""
+	}
+	if s, ok := localSuffixes.Load(obj); ok {
+		return s.(string)
+	}
+	s := computeLocalSuffix(obj)
+	localSuffixes.Store(obj, s)
+	return s
+}
+
+func computeLocalSuffix(obj *types.TypeName) string {
+	pkg := obj.Pkg()
+	// The function scope is the child of a file scope, whose parent is the
+	// package scope.
+	fs := obj.Parent()
+	for fs != nil && (fs.Parent() == nil || fs.Parent().Parent() != pkg.Scope()) {
+		fs = fs.Parent()
+	}
+	fnName := ""
+	if fs != nil {
+		fnName = enclosingFunc(pkg, fs)
+	}
+	if fnName == "" {
+		return "$local"
+	}
+	var same []*types.TypeName
+	var walk func(s *types.Scope)
+	walk = func(s *types.Scope) {
+		if tn, ok := s.Lookup(obj.Name()).(*types.TypeName); ok {
+			same = append(same, tn)
+		}
+		for i := 0; i < s.NumChildren(); i++ {
+			walk(s.Child(i))
+		}
+	}
+	walk(fs)
+	if len(same) < 2 {
+		return "$" + fnName
+	}
+	sort.Slice(same, func(i, j int) bool { return same[i].Pos() < same[j].Pos() })
+	for i, tn := range same {
+		if tn == obj {
+			return fmt.Sprintf("$%s$%d", fnName, i+1)
+		}
+	}
+	return "$" + fnName
+}
+
+// enclosingFunc returns the name of the package-level function or method
+// whose scope is fs: "<name>" or "<receiver type>$<method>".
+func enclosingFunc(pkg *types.Package, fs *types.Scope) string {
+	sc := pkg.Scope()
+	for _, n := range sc.Names() {
+		switch o := sc.Lookup(n).(type) {
+		case *types.Func:
+			if o.Scope() == fs {
+				return o.Name()
+			}
+		case *types.TypeName:
+			nt, ok := o.Type().(*types.Named)
+			if !ok {
+				continue
+			}
+			for i := 0; i < nt.NumMethods(); i++ {
+				if m := nt.Method(i); m.Scope() == fs {
+					return o.Name() + "$" + m.Name()
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func typeArgs(args *types.TypeList) string {
@@ -60,13 +151,14 @@ func typeArgs(args *types.TypeList) string {
 	return b.String()
 }
 
-// typeArg mangles one type argument. Types other than named, pointer-to-named
-// and basic fall back to their Go spelling with non-identifier characters
+// typeArg mangles one type argument. A pointer is spelled "ptr_" followed by
+// its element, so that Request[*T] and Request[T] get different names.
+// Types other than named, pointer-to-named and basic fall back to their Go spelling with non-identifier characters
 // replaced by '_'.
 func typeArg(t types.Type) string {
 	u := types.Unalias(t)
 	if p, ok := u.(*types.Pointer); ok {
-		u = types.Unalias(p.Elem())
+		return "ptr_" + typeArg(p.Elem())
 	}
 	switch u.(type) {
 	case *types.Named, *types.Basic:
