@@ -1,7 +1,7 @@
 # Go コードを Infer の taint 解析にかける試作 設計
 
 - 作成日: 2026-10-28
-- 状態: 承認済み（2026-10-28）
+- 状態: 承認済み（2026-10-28）。試作は実装済みで、成功の条件を満たした（「結果」を参照）
 
 ## 目的と背景
 
@@ -64,7 +64,7 @@ Go のソース
 - サンプルは本物の `connectrpc.com/connect`、`google.golang.org/grpc`、`github.com/uptrace/bun` を go.mod に入れて使う（ユーザーの決定）。こうすると、`.inferconfig` に書く設定を実際のコードにもそのまま使える。`.proto` から生成するコードは buf で作り、生成結果をコミットする。これにより、テストの実行に buf は要らない（設計時の判断）。`.sil` に本体つきで変換するのはサンプルのパッケージの関数だけで、依存パッケージの関数は呼ばれるものだけ本体のない宣言にする。
 - どのハンドラを入力元にするかは、引数の型で決める（ユーザーの決定）。`*connect.Request[T]` 型の引数と、gRPC 用に生成されたリクエストメッセージ型の引数を、それを受け取る関数がどれであっても入力元とする。Pulse の `taint_target` の `ArgumentsMatchingTypes` を使う想定。生成されたメッセージ型をどう見分けるか（生成コードのパッケージパスで決めるか、型名の規則で決めるか）は、作る人に任せる。ただし、`.inferconfig` の書き換えだけで別のコードにも当てはめられる形にする。ハンドラから repository 層の関数にリクエストの値がそのまま渡された場合、その関数の引数も入力元になる。重複して報告されることは許容する。
 - bun、connect、gRPC、`database/sql`、`fmt` など外部パッケージの中身は解析しない。サンプルから呼ばれる関数だけを、本体を持たない宣言（Textual の `declare`）として `.sil` に出力する。
-- 文字列連結や `fmt.Sprintf` は、入力の taint が戻り値に伝わる必要がある。本体を持たない宣言の taint を Pulse がどう扱うかは確認していない。伝わらない場合は、変換ツールが `.sil` に簡単なモデル（引数を戻り値に流すだけの本体）を出力する。
+- 文字列連結や `fmt.Sprintf` は、入力の taint が戻り値に伝わる必要がある。本体を持たない宣言の taint を Pulse がどう扱うかは、v1.3.0 のバイナリで確かめた（「v1.3.0 のバイナリで確かめたこと」の `TestProbeUnknownCallPropagates` と `TestProbeUnknownCallThroughField`）。引数を直接渡す場合は伝わり、slice の要素に入れた taint は伝わらない。そのため `fmt.Sprintf` には、変換ツールが `.sil` に簡単なモデル（要素を読んで戻り値に流す本体）を出力する。
 
 ### Infer で確認済みのこと（2026-10-28 時点、facebook/infer main ブランチ）
 
@@ -72,7 +72,7 @@ Go のソース
 - 危険な関数の「何番目の引数が危険か」は、matcher の `taint_target` に `["ArgumentPositions", [0]]` のように書いて指定できる（`infer/src/atd/pulse_config.atd`）。
 - 入力元に指定した関数を解析するとき、Pulse はその関数の引数に taint を付ける（`infer/src/pulse/PulseTaintOperations.ml` の `taint_initial`）。これを使い、ハンドラ関数を入力元に指定することで、`req` 引数を入力元として扱う。
 - Textual の `.source_language` に指定できるのは C、Hack、Java、Python、Rust、Swift、ObjectiveC で、Go はない（`infer/src/textual/Textual.ml` の `Lang`）。
-- 上の機能（`ArgumentPositions`、`ArgumentsMatchingTypes`、`taint_initial`、`--capture-textual`）は v1.3.0 タグのソースにもある。ただし、v1.3.0 のバイナリで実際に動かして確かめたわけではない。動かなかった場合は、main の特定のコミットをソースからビルドして使う（設計時の判断）。
+- 上の機能（`ArgumentPositions`、`ArgumentsMatchingTypes`、`taint_initial`、`--capture-textual`）は v1.3.0 タグのソースにもある。v1.3.0 のバイナリでも動くことは「v1.3.0 のバイナリで確かめたこと」に書いた。main をソースからビルドする必要はなかった。
 
 #### v1.3.0 のバイナリで確かめたこと（2026-10-28、計画の Task 1）
 
@@ -164,7 +164,7 @@ Infer の設定は関数名で入力元と危険な関数を指定する。そ�
 - Go のパッケージパス・レシーバの型・メソッド名から一意に決まり、`.inferconfig` に書いたとき人が読める。
 - `procedure_regex` で「あるパッケージのあるメソッド」を指定できる。
 
-具体的な文字の置き換え方は実装時に決める（作る人に任せる）。決めた規則はこのドキュメントに追記する。
+具体的な文字の置き換え方は実装時に決める（作る人に任せる）。決めた規則は下の「結果」の「関数名の変換規則（実装）」に書いた。
 
 2026-10-28 追記: `.source_language = "c"` では Textual の `Cls.m` という名前のクラスの部分が落ちる（「v1.3.0 のバイナリで確かめたこと」を参照）。そのため、関数もメソッドも、パッケージとレシーバの型を含めた 1 つのトップレベルの名前で出力する。トップレベルの名前に `::` と `$` を使えること、report.json の `procedure` にその名前がそのまま出ることは確かめてある。C の標準ライブラリの関数と同じ名前にならないようにする。
 
@@ -178,6 +178,44 @@ Infer の設定は関数名で入力元と危険な関数を指定する。そ�
 - 対象にしない: goroutine、channel、`select`、`defer`、`panic`/`recover`、map、可変長引数以外の slice の操作（必要になったら本体のない宣言の呼び出しに置き換える）、reflect。
 - 変換できない SSA 命令が出てきたら、変換ツールはその関数を本体のない宣言として出力し、警告を標準エラーに出す。その関数のために処理全体を止めることはしない。
 - テストでは、サンプルの関数が本体つきで変換されたこと（変換できなかった警告が出ていないこと）も確かめる。これを確かめないと、安全な側のサンプルが変換に失敗しただけで「報告しない」として通ってしまう（設計時の判断）。
+
+## 結果
+
+### 成功の条件
+
+満たした。`e2e/e2e_test.go` が `./examples/connectsvc ./examples/grpcsvc ./examples/userrepo` を go2sil で `.sil` に変換し（警告が出れば失敗する）、Infer v1.3.0 の `capture --capture-textual` と `analyze --pulse-only` にかけ、`.inferconfig` で指定した入力元と危険な関数について報告された関数の集合を、サンプル中の `// want: TAINT_ERROR` の付いた関数の集合と比べる。2026-11-02 時点の実行結果は次のとおり。
+
+- got = want = `[GetUserBad GetUserViaRepoBad SearchUsersBad SearchUsersSQLBad SearchUsersSafeBad]`
+- 報告される流れ: connect のハンドラから `Where`、repository 層を経由した `Where`、gRPC のハンドラから `fmt.Sprintf` を経た `NewRaw`、`database/sql` の `QueryContext`、`bun.Safe` への変換と `OrderExpr`。
+- 報告されない対: 外部入力を `args` に渡す書き方（`want: none` の関数）。
+
+### `.source_language` の選択
+
+`c` にした。理由は「v1.3.0 のバイナリで確かめたこと」に書いた。`direct.sil` で `c`、`rust`、`hack`、`swift` が報告し、`java` は報告せず、`python` は取り込みに失敗した。報告した言語のうち優先順の先頭の `c` を選んだ。
+
+### Infer の挙動
+
+「Infer で確認済みのこと」の次の節に書いてある。
+
+- 「v1.3.0 のバイナリで確かめたこと」: 引数の型で入力元を指定する `ArgumentsMatchingTypes`、危険な引数の番号（レシーバが 0 番）、本体のない宣言の taint の伝わり方、関数名の照合。
+- 「関数本体の変換で確かめたこと」「可変長引数・インタフェース・型の変換で確かめたこと」「本物のライブラリを使うサンプルで確かめたこと」: 取り込みが通る型の組み合わせと、`.inferconfig` の書き方。
+
+### 関数名の変換規則（実装）
+
+実装は `internal/mangle/mangle.go`。すべての名前は `::` を含む 1 つのトップレベルの識別子で、C の標準ライブラリの関数名と一致しない（`mangle.Table.Add` が `::` を含まない名前と、異なる Go の名前からの同じ名前を拒否する。`__sil_` で始まる Infer の組み込みは除く）。
+
+- パッケージのパス（`mangle.Pkg`）: `/` を `::`、`.` と `-` を `_` に置き換える。`database/sql` は `database::sql`、`github.com/uptrace/bun` は `github_com::uptrace::bun`。
+- 名前付きの型（`mangle.Type`）: `<パッケージ>::<型名>`。ジェネリクスの型は、型引数ごとに `$` を前に付け、最後に `$` を付ける。`connect.Request[GetUserRequest]` は `connectrpc_com::connect::Request$<型引数の名前>$`。
+- パッケージの関数（`mangle.Func`）: `<パッケージ>::<関数名>`。ジェネリクスの関数は `<パッケージ>::<関数名>$<型引数>$`。
+- メソッド: `<レシーバの型の名前>$<メソッド名>`（ポインタレシーバのポインタは外す）。例: `github_com::uptrace::bun::SelectQuery$Where`。
+- 関数リテラル: 親の名前に go/ssa の名前の続き（`$1` など）を付ける。
+- go/ssa が作るラッパーは、元の名前と衝突しないよう接尾辞を付ける。ラッパーは `$wrapper`、束縛されたメソッド値は `$bound`、メソッド式の thunk は `$thunk`。
+- 実行時の補助: `go::rt::string_concat`、`go::rt::make_iface`、`go::rt::string_const`、名前付きの型への変換は `go::rt::convert$<型の名前>`。`fmt.Sprintf` のモデルは `fmt::Sprintf`。
+- `.inferconfig` では `procedure_regex` を `^...$` で囲み、`$` は JSON の中で `\\$` と書く。
+
+### 既知の制限
+
+利用者向けの一覧は `README.md` の「変換の対象外の Go の機能」と「既知の制限」に書いた。
 
 ## 目的に含めないもの
 
