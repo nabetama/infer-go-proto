@@ -212,3 +212,22 @@ func TestTypeAnonStructCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTypeAnonStructAcrossPackages(t *testing.T) {
+	// struct{ x int } in an1 and in an2 are not types.Identical (the field x
+	// is unexported, so it belongs to its package), but both are spelled
+	// go::struct$struct_x_int_$ with the same fields, so the declaration is
+	// shared.
+	m, warn := translatePkgs(t, "./testdata/src/anonpkg/an1", "./testdata/src/anonpkg/an2")
+	if warn != "" {
+		t.Fatalf("warnings:\n%s", warn)
+	}
+	d, ok := declByName(m.Types, "go::struct$struct_x_int_$")
+	if !ok || !reflect.DeepEqual(d.Fields, []sil.Field{{Name: "x", Type: "int"}}) {
+		t.Fatalf("decl = %v, %v", d, ok)
+	}
+	path, _ := writeSil(t, m)
+	if err := infertest.Capture(t, []string{path}); err != nil {
+		t.Fatal(err)
+	}
+}

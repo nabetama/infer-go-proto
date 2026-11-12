@@ -3,6 +3,7 @@ package translate
 import (
 	"fmt"
 	"go/types"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -25,22 +26,47 @@ type typeConv struct {
 	// seen holds the names whose declaration is built or being built, so
 	// recursive types terminate.
 	seen map[string]bool
-	// goTypes holds the Go type each struct declaration was built from.
-	goTypes map[string]types.Type
-	// err is the first name collision found (see Err).
-	err error
+	// goTypes holds, for each struct declaration, the Go types converted to
+	// it that are not types.Identical to each other. The first one is the
+	// type the declaration was built from.
+	goTypes map[string][]types.Type
+	// others holds the fields built from goTypes[name][1:], to be compared
+	// with the declaration in Err.
+	others map[string][][]sil.Field
 }
 
 func newTypeConv() *typeConv {
-	return &typeConv{decls: map[string]sil.TypeDecl{}, seen: map[string]bool{}, goTypes: map[string]types.Type{}}
+	return &typeConv{
+		decls:   map[string]sil.TypeDecl{},
+		seen:    map[string]bool{},
+		goTypes: map[string][]types.Type{},
+		others:  map[string][][]sil.Field{},
+	}
 }
 
-// Err returns an error if two Go struct types that are not types.Identical
-// were converted to the same Textual name (for example the packages
-// "example.com/a.b" and "example.com/a_b" both declaring T). Only one
+// Err returns an error if two Go struct types were converted to the same
+// Textual name but their Textual declarations differ: the field names or the
+// Textual field types, in order (for example the packages "example.com/a.b"
+// and "example.com/a_b" both declaring T with different fields). Only one
 // declaration per name is emitted, so Infer would reject the fields of the
-// other type.
-func (c *typeConv) Err() error { return c.err }
+// other type. Types that are not types.Identical but have the same
+// declaration (struct{ x int } written in two packages: the unexported field
+// belongs to its package) share the declaration.
+func (c *typeConv) Err() error {
+	names := make([]string, 0, len(c.others))
+	for n := range c.others {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		for i, fields := range c.others[name] {
+			if !reflect.DeepEqual(fields, c.decls[name].Fields) {
+				return fmt.Errorf("types %s and %s both map to the Textual type %q", c.goTypes[name][0], c.goTypes[name][i+1], name)
+			}
+		}
+	}
+	return nil
+}
 
 // Type returns the Textual type of t and records the declarations it needs.
 //
@@ -139,21 +165,27 @@ func (c *typeConv) runtime(name string) sil.Type {
 }
 
 func (c *typeConv) structType(name string, t types.Type, st *types.Struct) sil.Type {
-	if prev, ok := c.goTypes[name]; ok {
-		if c.err == nil && !types.Identical(prev, t) {
-			c.err = fmt.Errorf("types %s and %s both map to the Textual type %q", prev, t, name)
+	for _, prev := range c.goTypes[name] {
+		if types.Identical(prev, t) {
+			return sil.Type("*" + name)
 		}
-	} else {
-		c.goTypes[name] = t
 	}
-	if !c.seen[name] {
-		c.seen[name] = true // before the fields, so that recursive types terminate
-		fields := make([]sil.Field, st.NumFields())
-		for i := range fields {
-			f := st.Field(i)
-			fields[i] = sil.Field{Name: fieldName(st, i), Type: c.Type(f.Type())}
-		}
+	// Record t before converting the fields, so that recursive types terminate.
+	first := len(c.goTypes[name]) == 0
+	c.goTypes[name] = append(c.goTypes[name], t)
+	if first {
+		c.seen[name] = true
+	}
+	fields := make([]sil.Field, st.NumFields())
+	for i := range fields {
+		fields[i] = sil.Field{Name: fieldName(st, i), Type: c.Type(st.Field(i).Type())}
+	}
+	if first {
 		c.decls[name] = sil.TypeDecl{Name: name, Fields: fields}
+	} else {
+		// The declaration may still be being built (recursive types), so
+		// the comparison is left to Err.
+		c.others[name] = append(c.others[name], fields)
 	}
 	return sil.Type("*" + name)
 }

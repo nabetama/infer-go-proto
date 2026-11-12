@@ -44,9 +44,10 @@ func (w Warning) String() string {
 // package initializer is not translated.
 //
 // A function containing an unsupported instruction is declared instead and
-// a Warning line is written to warn (nil discards warnings). Two Go functions,
-// or two Go struct types that are not types.Identical, mapping to the same
-// Textual name is an error.
+// a Warning line is written to warn (nil discards warnings). Two Go functions
+// mapping to the same Textual name is an error, and so are two Go struct
+// types mapping to the same Textual name with different field names or
+// Textual field types (see typeConv.Err).
 func Translate(pkgs []*ssa.Package, warn io.Writer) (*sil.Module, error) {
 	if warn == nil {
 		warn = io.Discard

@@ -106,3 +106,11 @@ func TestNoPackagesMatched(t *testing.T) {
 		t.Error("output file created on failure")
 	}
 }
+
+func TestAnonStructAcrossPackages(t *testing.T) {
+	dir := filepath.Join("..", "..", "internal", "translate", "testdata", "src", "anonpkg")
+	code, stdout, stderr := runCmd(t, "-C", dir, "./an1", "./an2")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "go::struct$struct_x_int_$") {
+		t.Fatalf("code=%d stderr=%q stdout=%.40q", code, stderr, stdout)
+	}
+}
