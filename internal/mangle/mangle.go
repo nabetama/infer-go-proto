@@ -54,7 +54,8 @@ func named(obj *types.TypeName, args *types.TypeList) string {
 var localSuffixes sync.Map // *types.TypeName -> string
 
 // localSuffix returns "" for a package-level type, and for a type that is
-// not in any scope (types built by hand). For a type declared inside a
+// not in any scope (types built by hand) unless SetInstanceLocal registered
+// it. For a type declared inside a
 // function it returns "$<function>", where <function> is the name
 // of the enclosing top-level function, or "<receiver type>$<method>" for a
 // method. When the function declares several types of the same name (in
@@ -63,16 +64,26 @@ var localSuffixes sync.Map // *types.TypeName -> string
 // function cannot be found, the suffix is "$local". Translate reports an error when two different types
 // end up with the same name.
 func localSuffix(obj *types.TypeName) string {
+	if s, ok := localSuffixes.Load(obj); ok {
+		return s.(string)
+	}
 	pkg := obj.Pkg()
 	if obj.Parent() == nil || obj.Parent() == pkg.Scope() {
 		return ""
 	}
-	if s, ok := localSuffixes.Load(obj); ok {
-		return s.(string)
-	}
 	s := computeLocalSuffix(obj)
 	localSuffixes.Store(obj, s)
 	return s
+}
+
+// SetInstanceLocal names fresh, a type that go/ssa created for the type orig
+// declared inside a generic function, when it built the instance with type
+// arguments targs. go/ssa creates a distinct type, with an object that is
+// in no scope, per instance. The name is that of orig followed by the type
+// arguments as for a generic type: Pkg::<orig name><local suffix>$<arg>$,
+// e.g. Pkg::cell$Wrap$int$ for "type cell" inside Wrap[int].
+func SetInstanceLocal(fresh, orig *types.TypeName, targs []types.Type) {
+	localSuffixes.Store(fresh, localSuffix(orig)+typeArgList(targs))
 }
 
 func computeLocalSuffix(obj *types.TypeName) string {

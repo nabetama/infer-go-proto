@@ -32,7 +32,7 @@ go run ./cmd/go2sil [-C dir] [-o out.sil] <パッケージのパターン...>
 
 - `-C dir`: パッケージを読み込むディレクトリ（既定は `.`）。
 - `-o out.sil`: 出力ファイル（既定は標準出力）。
-- 本体を変換するのは、引数に指定したパッケージの関数だけ。依存パッケージの関数は、呼ばれるものだけ本体のない宣言（`declare`）として出力する。
+- 本体を変換するのは、引数に指定したパッケージの関数だけ。依存パッケージの関数は、呼ばれるものだけ本体のない宣言（`declare`）として出力する。ジェネリクスの関数とメソッドは、呼ばれる型引数ごとのインスタンス（`F[int]` なら `<パッケージ>::F$int$`）を変換する。引数に指定したパッケージのインスタンスは本体を変換し、依存パッケージのインスタンス（`cmp.Compare[int]` なら `cmp::Compare$int$`）は本体のない宣言として出力する。
 - 変換できない SSA 命令がある関数は本体のない宣言として出力し、標準エラーに `go2sil: warning: <関数の Go 名>: unsupported <命令の型>` を 1 行出す。命令ではなくオペランド（パッケージの変数など）が原因のときは、行の最後に ` (operand <オペランドの型>)` が付く（例: `unsupported *ssa.UnOp (operand *ssa.Global)`）。処理全体は止めない。
 - 次のときは何も出力せず、標準エラーに `go2sil: <エラー>` を出して終了コード 1 で終わる: パッケージの読み込みや型検査のエラー、パターンに一致するパッケージがない（`./docs/...` のように Go のファイルがないディレクトリ）、Go の別々の関数や別々の struct の型が `.sil` 上で同じ名前になる（例: パッケージ `example.com/a.b` と `example.com/a_b` の同名の型）。
 
@@ -58,7 +58,7 @@ go run ./cmd/go2sil -o /tmp/out.sil ./examples/connectsvc ./examples/grpcsvc ./e
 |---|---|
 | パッケージのパス | `/` を `::`、`.` と `-` を `_` に置き換える。`github.com/uptrace/bun` は `github_com::uptrace::bun`、`database/sql` は `database::sql` |
 | パッケージの関数 | `<パッケージ>::<関数名>` |
-| 関数の中で宣言した型 | `<パッケージ>::<型名>$<関数名>`。メソッドの中なら `<パッケージ>::<型名>$<レシーバの型名>$<メソッド名>`。同じ関数に同名の型が複数あれば、ソースの順に `$1`、`$2` を付ける |
+| 関数の中で宣言した型 | `<パッケージ>::<型名>$<関数名>`。メソッドの中なら `<パッケージ>::<型名>$<レシーバの型名>$<メソッド名>`。同じ関数に同名の型が複数あれば、ソースの順に `$1`、`$2` を付ける。ジェネリクスの関数の中で宣言した型は、さらにその関数のインスタンスの型引数を付ける。`Wrap[int]` の中の `type cell` は `<パッケージ>::cell$Wrap$int$` |
 | ジェネリクスの型 | 型引数ごとに `$` を前に付け、最後に `$` を付ける。ポインタの型引数は `ptr_` を前に付ける。`connect.Request[pb.GetUserRequest]` は `connectrpc_com::connect::Request$<pb のパッケージ>::GetUserRequest$`、`Request[*pb.GetUserRequest]` は `connectrpc_com::connect::Request$ptr_<pb のパッケージ>::GetUserRequest$` |
 | メソッド | `<パッケージ>::<型名>$<メソッド名>`（ポインタレシーバの `*` は付かない）。例: `github_com::uptrace::bun::SelectQuery$Where` |
 | 名前付きの型への変換 | `go::rt::convert$<型の名前>`。例: `go::rt::convert$github_com::uptrace::bun::schema::Safe` |

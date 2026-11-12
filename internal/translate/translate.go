@@ -129,14 +129,23 @@ type translator struct {
 }
 
 // enqueue schedules fn to be defined (or declared if it has no body or
-// cannot be translated). Generic functions are skipped; their instances are
-// reached through calls.
+// cannot be translated). Generic functions (with type parameters and no type
+// arguments) are skipped; their instances are reached through calls. An
+// instance keeps the type parameters of its origin in TypeParams and has
+// the type arguments in TypeArgs, so it is not skipped.
 func (tr *translator) enqueue(fn *ssa.Function) {
-	if tr.queued[fn] || fn.TypeParams().Len() > 0 {
+	if tr.queued[fn] || isGeneric(fn) {
 		return
 	}
 	tr.queued[fn] = true
 	tr.queue = append(tr.queue, fn)
+}
+
+// isGeneric reports whether fn is a generic function or method that is not
+// instantiated: it has no body in InstantiateGenerics mode that could be
+// translated, since its types refer to type parameters.
+func isGeneric(fn *ssa.Function) bool {
+	return fn.TypeParams().Len() > 0 && len(fn.TypeArgs()) == 0
 }
 
 // isTarget reports whether fn belongs to a target package and should be
@@ -178,6 +187,7 @@ func homePkg(fn *ssa.Function) *types.Package {
 // function defines fn, or declares it if it has no body or contains an
 // unsupported instruction.
 func (tr *translator) function(fn *ssa.Function) error {
+	nameInstanceLocals(fn)
 	name := mangle.Func(fn)
 	if err := tr.names.Add(fn.String(), name); err != nil {
 		return err
