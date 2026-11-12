@@ -1,0 +1,13 @@
+// *Plain 型の引数を、そのまま危険な関数に渡す（入力元の型ではないので報告されない）。
+
+type S = {}
+type Plain = { Name: *S }
+
+declare sink(*Plain) : void
+
+define handler(p: *Plain) : void {
+  #b0:
+    n0: *Plain = load &p
+    n1 = sink(n0)
+    ret null
+}

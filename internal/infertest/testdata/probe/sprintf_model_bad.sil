@@ -1,0 +1,29 @@
+// fmt_sprintf に「args.elem を読み、format とつないで返す」本体を与えたモデル。
+// 入力元の値を *Slice のフィールドに書いて渡すと、戻り値に taint が伝わる（報告される）。
+
+type S = {}
+type Slice = { elem: *S }
+
+declare source() : *S
+declare sink(*S) : void
+declare concat(*S, *S) : *S
+
+define fmt_sprintf(format: *S, args: *Slice) : *S {
+  #b0:
+    n0: *S = load &format
+    n1: *Slice = load &args
+    n2: *S = load n1.Slice.elem
+    n3 = concat(n0, n2)
+    ret n3
+}
+
+define f(format: *S) : void {
+  #b0:
+    n0 = source()
+    n1 = __sil_allocate(<Slice>)
+    store n1.Slice.elem <- n0 : *S
+    n2: *S = load &format
+    n3 = fmt_sprintf(n2, n1)
+    n4 = sink(n3)
+    ret null
+}

@@ -1,0 +1,15 @@
+// *Req 型の引数を受け取るが、危険な関数には別の引数を渡す（報告されない）。
+
+type S = {}
+type Req = { Name: *S }
+
+declare sink(*S) : void
+
+define handler(req: *Req, other: *S) : void {
+  #b0:
+    n0: *Req = load &req
+    n1: *S = load n0.Req.Name
+    n2: *S = load &other
+    n3 = sink(n2)
+    ret null
+}

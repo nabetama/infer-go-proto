@@ -1,0 +1,16 @@
+// 入力元の値を本体のない関数 concat に渡し、その戻り値を危険な関数に渡す（報告される）。
+
+type S = {}
+
+declare source() : *S
+declare sink(*S) : void
+declare concat(*S, *S) : *S
+
+define f(other: *S) : void {
+  #b0:
+    n0 = source()
+    n1: *S = load &other
+    n2 = concat(n1, n0)
+    n3 = sink(n2)
+    ret null
+}

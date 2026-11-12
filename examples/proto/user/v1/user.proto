@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package user.v1;
+
+option go_package = "github.com/nabetama/infer-go-proto/examples/gen/user/v1;userv1";
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse);
+}
+
+message GetUserRequest {
+  string name = 1;
+}
+
+message GetUserResponse {
+  string name = 1;
+}
+
+message SearchUsersRequest {
+  string order_by = 1;
+}
+
+message SearchUsersResponse {
+  repeated string names = 1;
+}

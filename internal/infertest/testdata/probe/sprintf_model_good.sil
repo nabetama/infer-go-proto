@@ -1,0 +1,28 @@
+// sprintf_model_bad.sil と同じモデルで、*Slice のフィールドに入力元でない値を書く（報告されない）。
+
+type S = {}
+type Slice = { elem: *S }
+
+declare source() : *S
+declare sink(*S) : void
+declare concat(*S, *S) : *S
+
+define fmt_sprintf(format: *S, args: *Slice) : *S {
+  #b0:
+    n0: *S = load &format
+    n1: *Slice = load &args
+    n2: *S = load n1.Slice.elem
+    n3 = concat(n0, n2)
+    ret n3
+}
+
+define f(format: *S) : void {
+  #b0:
+    n0 = source()
+    n1 = __sil_allocate(<Slice>)
+    n2: *S = load &format
+    store n1.Slice.elem <- n2 : *S
+    n3 = fmt_sprintf(n2, n1)
+    n4 = sink(n3)
+    ret null
+}
