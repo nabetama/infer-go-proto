@@ -1,0 +1,17 @@
+// クラスだけが違う同じ名前のメソッド a::A.get と b::B.get を定義する。
+
+type S = {}
+type a::A = {}
+type b::B = {}
+
+define a::A.get(this: *a::A, s: *S) : *S {
+  #b0:
+    n0: *S = load &s
+    ret n0
+}
+
+define b::B.get(this: *b::B, s: *S) : *S {
+  #b0:
+    n0: *S = load &s
+    ret n0
+}

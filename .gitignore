@@ -1,0 +1,4 @@
+# Infer の公式バイナリ（scripts/install-infer.sh で展開する）
+.tools/
+# Infer の出力
+infer-out/

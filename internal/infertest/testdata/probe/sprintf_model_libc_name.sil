@@ -1,0 +1,29 @@
+// sprintf_model_bad.sil と同じ形で、関数名だけを C の標準ライブラリと同じ sprintf にする。
+// 定義した本体は使われず（Pulse が C の sprintf 用に持つモデルが使われるとみられる）、報告されない。
+
+type S = {}
+type Slice = { elem: *S }
+
+declare source() : *S
+declare sink(*S) : void
+declare concat(*S, *S) : *S
+
+define sprintf(format: *S, args: *Slice) : *S {
+  #b0:
+    n0: *S = load &format
+    n1: *Slice = load &args
+    n2: *S = load n1.Slice.elem
+    n3 = concat(n0, n2)
+    ret n3
+}
+
+define f(format: *S) : void {
+  #b0:
+    n0 = source()
+    n1 = __sil_allocate(<Slice>)
+    store n1.Slice.elem <- n0 : *S
+    n2: *S = load &format
+    n3 = sprintf(n2, n1)
+    n4 = sink(n3)
+    ret null
+}

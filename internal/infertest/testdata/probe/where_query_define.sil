@@ -1,0 +1,24 @@
+// 入力元の値を、本体つきの Q.Where の query（レシーバの次の引数）に渡す（報告される）。
+
+type S = {}
+type Slice = { elem: *S }
+type Q = {}
+
+declare source() : *S
+
+define Q.Where(this: *Q, query: *S, args: *Slice) : *Q {
+  #b0:
+    n0: *Q = load &this
+    ret n0
+}
+
+define f(q: *Q, safe: *S) : void {
+  #b0:
+    n0 = source()
+    n1: *Q = load &q
+    n2 = __sil_allocate(<Slice>)
+    n3: *S = load &safe
+    store n2.Slice.elem <- n3 : *S
+    n4 = Q.Where(n1, n0, n2)
+    ret null
+}

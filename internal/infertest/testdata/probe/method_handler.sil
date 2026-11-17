@@ -1,0 +1,21 @@
+// メソッドとして定義したハンドラ Svc.Handle の *Req 型の引数が入力元になり、
+// そのフィールドを危険なメソッド Q.Where の query に渡す（報告される）。
+// report.json の procedure に出る名前の形も、このファイルで確かめる。
+
+type S = {}
+type Slice = { elem: *S }
+type Req = { Name: *S }
+type Svc = {}
+type Q = {}
+
+declare Q.Where(*Q, *S, *Slice) : *Q
+
+define Svc.Handle(this: *Svc, req: *Req, q: *Q) : void {
+  #b0:
+    n0: *Req = load &req
+    n1: *S = load n0.Req.Name
+    n2: *Q = load &q
+    n3 = __sil_allocate(<Slice>)
+    n4 = Q.Where(n2, n1, n3)
+    ret null
+}
